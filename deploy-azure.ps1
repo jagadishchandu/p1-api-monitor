@@ -6,11 +6,13 @@
     Follows the same approach as school-lms\infra\deploy-containerapp.ps1:
       1. Signs in with device code (Connect-AzAccount -UseDeviceAuthentication), if needed.
       2. Reads settings from .env in this folder. Nothing is printed, and secrets go only to Azure.
-      3. Shows which resources already exist, and which are missing.
-      4. Reuses existing resources and creates the missing ones (resource group, storage account, container,
-         container registry, Container Apps environment, container app).
-      5. Builds the image with local Docker, pushes it, and removes older images from the registry and this PC.
-      6. Creates or updates the container app with New-AzResource (an ARM request), then checks the app.
+      3. Looks for each resource only in the subscription and resource group given for it (see the parameters).
+         Existing resources are reused. Missing ones are created in that same subscription and resource group.
+      4. Builds the image with local Docker, pushes it, and removes older images from the registry and this PC.
+      5. Creates or updates the container app with New-AzResource (an ARM request), then checks the app.
+
+    Each resource has its own -<Resource>SubscriptionId and -<Resource>ResourceGroup. Leave them empty to use the
+    main -SubscriptionId and -ResourceGroup. The app must be in the same subscription as its environment.
 
     Docker is needed to build and push the image. The Azure CLI is not used.
     The Container Apps environment has no log destination, so no Log Analytics workspace is created.
@@ -23,22 +25,36 @@
 
 .EXAMPLE
     .\deploy-azure.ps1 -Suffix jc01 -AllowedIpRange 203.0.113.0/24
+
+.EXAMPLE
+    .\deploy-azure.ps1 -SubscriptionId <sub-a> -ResourceGroup rg-p1 -StorageSubscriptionId <sub-b> -StorageResourceGroup rg-data
 #>
 [CmdletBinding()]
 param(
     # Short text, lowercase letters and digits (3-12 characters). Makes the registry and storage account names unique.
-    # Optional: when empty, the script reuses the registry and storage account already in the resource group,
+    # Optional: when empty, the script reuses the registry and storage account already in the main resource group,
     # or creates new ones with a random suffix.
     [ValidatePattern('^([a-z0-9]{3,12})?$')]
     [string]$Suffix = "",
 
-    [string]$ResourceGroup = "rg-p1-api-monitor-test",
-    [string]$Location = "eastus",
+    # Main subscription and resource group. Used for every resource that has no own subscription or group below.
+    [string]$SubscriptionId = "a8515d0e-8966-4b18-8231-4f6b763b8945",
+    [string]$ResourceGroup = "rg-p1-api-monitor0",
+    [string]$Location = "eastus2",
+
+    # Optional per-resource location. Leave empty to use -SubscriptionId and -ResourceGroup.
+    [string]$StorageSubscriptionId = "a8515d0e-8966-4b18-8231-4f6b763b8945",
+    [string]$StorageResourceGroup = "rg-p1-api-monitor0",
+    [string]$RegistrySubscriptionId = "a8515d0e-8966-4b18-8231-4f6b763b8945",
+    [string]$RegistryResourceGroup = "rg-p1-api-monitor0",
+    [string]$EnvironmentSubscriptionId = "a8515d0e-8966-4b18-8231-4f6b763b8945",
+    [string]$EnvironmentResourceGroup = "rg-p1-api-monitor0",
+    [string]$AppSubscriptionId = "a8515d0e-8966-4b18-8231-4f6b763b8945",
+    [string]$AppResourceGroup = "rg-p1-api-monitor0",
+
     [string]$AppName = "p1-api-monitor",
     [string]$EnvironmentName = "cae-p1-api-monitor",
     [string]$ImageName = "p1-api-monitor",
-    # Optional. Leave empty to use the current subscription.
-    [string]$SubscriptionId = "",
     [string]$EnvFile = (Join-Path $PSScriptRoot ".env"),
     [string]$StorageContainer = "p1-api-monitor",
     [string]$StorageFolder = "p1-api-monitor",
@@ -58,12 +74,13 @@ function Write-Step([string]$Text) {
   Write-Host "==> $Text" -ForegroundColor Cyan
 }
 
-# Prints one line per resource: present (green) or missing (yellow).
-function Write-Status([string]$Name, [bool]$Present) {
+# Prints one line per resource: where it was found, or that it will be created there.
+function Write-Status([string]$Name, [hashtable]$Place, [bool]$Present) {
+  $where = "subscription $($Place.Sub), resource group $($Place.Rg)"
   if ($Present) {
-    Write-Host ("  {0,-40} present" -f $Name) -ForegroundColor Green
+    Write-Host ("  {0,-40} found in {1}" -f $Name, $where) -ForegroundColor Green
   } else {
-    Write-Host ("  {0,-40} missing (will be created)" -f $Name) -ForegroundColor Yellow
+    Write-Host ("  {0,-40} missing, will be created in {1}" -f $Name, $where) -ForegroundColor Yellow
   }
 }
 
@@ -111,6 +128,29 @@ function Invoke-Docker([string[]]$DockerArgs) {
   if ($code -ne 0) { throw "docker $($DockerArgs[0]) failed (exit $code)." }
 }
 
+# Switches the Azure context to a subscription, only when it is not already the current one.
+function Use-Subscription([string]$Id) {
+  if ((Get-AzContext).Subscription.Id -ne $Id) { Set-AzContext -Subscription $Id | Out-Null }
+}
+
+# A place is a subscription and a resource group. Empty values fall back to the main ones.
+function New-Place([string]$Sub, [string]$Rg) {
+  $s = $Sub
+  if (-not $s) { $s = $script:targetSub }
+  $r = $Rg
+  if (-not $r) { $r = $script:ResourceGroup }
+  return @{ Sub = $s; Rg = $r }
+}
+
+# Looks for one resource in exactly one place: the subscription and resource group given for it. No other subscription is searched.
+function Find-InPlace([hashtable]$Place, [string]$Type, [string]$Name, [string]$Version = "") {
+  Use-Subscription $Place.Sub
+  if ($Version) {
+    return Get-IfExists { Get-AzResource -ResourceGroupName $Place.Rg -ResourceType $Type -Name $Name -ApiVersion $Version -ErrorAction SilentlyContinue }
+  }
+  return Get-IfExists { Get-AzResource -ResourceGroupName $Place.Rg -ResourceType $Type -Name $Name -ErrorAction SilentlyContinue }
+}
+
 # ---------------------------------------------------------------- checks
 
 Write-Step "Checking tools and settings"
@@ -138,23 +178,32 @@ if (-not (Get-AzContext -ErrorAction SilentlyContinue)) {
   Connect-AzAccount -UseDeviceAuthentication | Out-Null
 }
 if ($SubscriptionId -ne "") { Set-AzContext -Subscription $SubscriptionId | Out-Null }
-$context = Get-AzContext
-$subscriptionId = $context.Subscription.Id
-Write-Host "Using subscription: $($context.Subscription.Name)"
+$targetSub = (Get-AzContext).Subscription.Id
+Write-Host "Main subscription: $((Get-AzContext).Subscription.Name) ($targetSub)"
+
+# Where each resource lives. Only these places are searched.
+$storagePlace = New-Place $StorageSubscriptionId $StorageResourceGroup
+$registryPlace = New-Place $RegistrySubscriptionId $RegistryResourceGroup
+$environmentPlace = New-Place $EnvironmentSubscriptionId $EnvironmentResourceGroup
+$appPlace = New-Place $AppSubscriptionId $AppResourceGroup
+if ($AppSubscriptionId -eq "" -and $AppResourceGroup -eq "") { $appPlace = $environmentPlace }
+if ($appPlace.Sub -ne $environmentPlace.Sub) {
+  throw "The app and its Container Apps environment must be in the same subscription. Set -AppSubscriptionId to the environment's subscription."
+}
 
 Write-Step "Resource providers"
+Use-Subscription $targetSub
 foreach ($namespace in @("Microsoft.App", "Microsoft.ContainerRegistry", "Microsoft.Storage")) {
   Register-AzResourceProvider -ProviderNamespace $namespace | Out-Null
 }
 
 # ---------------------------------------------------------------- names
 
-$existingGroup = Get-IfExists { Get-AzResourceGroup -Name $ResourceGroup -ErrorAction SilentlyContinue }
-
-# Without -Suffix, reuse the registry or storage account already in the resource group.
+# Without -Suffix, reuse the registry or storage account already in the main resource group.
 if ($Suffix -eq "") {
   $names = @()
-  if ($existingGroup) {
+  Use-Subscription $targetSub
+  if (Get-IfExists { Get-AzResourceGroup -Name $ResourceGroup -ErrorAction SilentlyContinue }) {
     $names += @(Get-AzStorageAccount -ResourceGroupName $ResourceGroup -ErrorAction SilentlyContinue |
       Where-Object { $_.StorageAccountName -like "stp1apimon*" } | ForEach-Object { $_.StorageAccountName.Substring(10) })
     $names += @(Get-AzContainerRegistry -ResourceGroupName $ResourceGroup -ErrorAction SilentlyContinue |
@@ -174,82 +223,74 @@ if ($Suffix -eq "") {
   }
 }
 
-$storageName = "stp1apimon$Suffix"
+$defaultStorageName = "stp1apimon$Suffix"
 $registryName = "acrp1apimon$Suffix"
-$image = $null  # set after the registry is known
+
+# The storage account named in .env is used only when it exists in the storage place. Otherwise it is ignored.
+$envConn = $settings["AZURE_STORAGE_CONNECTION_STRING"]
+$envAccountName = ""
+if ($envConn -match 'AccountName=([^;]+)') { $envAccountName = $Matches[1] }
+$envAccountFound = $false
+if ($envAccountName) {
+  $envAccountFound = [bool](Find-InPlace $storagePlace "Microsoft.Storage/storageAccounts" $envAccountName)
+}
+if ($envAccountFound) { $storageName = $envAccountName }
+else { $storageName = $defaultStorageName }
 
 # ---------------------------------------------------------------- resource check
 
 Write-Step "Checking which resources already exist"
-$envPresentNow = [bool](Get-IfExists { Get-AzResource -ResourceGroupName $ResourceGroup -ResourceType "Microsoft.App/managedEnvironments" -Name $EnvironmentName -ApiVersion $ApiVersion -ErrorAction SilentlyContinue })
-$appPresentNow = [bool](Get-IfExists { Get-AzResource -ResourceGroupName $ResourceGroup -ResourceType "Microsoft.App/containerApps" -Name $AppName -ApiVersion $ApiVersion -ErrorAction SilentlyContinue })
-$storagePresentNow = [bool](Get-IfExists { Get-AzStorageAccount -ResourceGroupName $ResourceGroup -Name $storageName -ErrorAction SilentlyContinue })
-$registryPresentNow = [bool](Get-IfExists { Get-AzContainerRegistry -ResourceGroupName $ResourceGroup -Name $registryName -ErrorAction SilentlyContinue })
-Write-Status "Resource group $ResourceGroup" ([bool]$existingGroup)
-Write-Status "Storage account $storageName" $storagePresentNow
-Write-Status "Container registry $registryName" $registryPresentNow
-Write-Status "Container Apps environment $EnvironmentName" $envPresentNow
-Write-Status "Container app $AppName" $appPresentNow
+$storageRef = Find-InPlace $storagePlace "Microsoft.Storage/storageAccounts" $storageName
+$registryRef = Find-InPlace $registryPlace "Microsoft.ContainerRegistry/registries" $registryName
+$envRef = Find-InPlace $environmentPlace "Microsoft.App/managedEnvironments" $EnvironmentName $ApiVersion
+$appRef = Find-InPlace $appPlace "Microsoft.App/containerApps" $AppName $ApiVersion
+Write-Status "Storage account $storageName" $storagePlace ([bool]$storageRef)
+Write-Status "Container registry $registryName" $registryPlace ([bool]$registryRef)
+Write-Status "Container Apps environment $EnvironmentName" $environmentPlace ([bool]$envRef)
+Write-Status "Container app $AppName" $appPlace ([bool]$appRef)
+if ($envConn -and -not $envAccountFound) {
+  Write-Host "The storage account in .env ($envAccountName) was not found in its storage place, so it is ignored." -ForegroundColor Yellow
+}
 
-# ---------------------------------------------------------------- resource group
-
-Write-Step "Resource group $ResourceGroup"
-if ($existingGroup) {
-  Write-Host "exists"
-} else {
-  New-AzResourceGroup -Name $ResourceGroup -Location $Location | Out-Null
-  Write-Host "created"
+# Creates the resource group in a place when it does not exist yet.
+function Ensure-Group([hashtable]$Place) {
+  Use-Subscription $Place.Sub
+  if (-not (Get-IfExists { Get-AzResourceGroup -Name $Place.Rg -ErrorAction SilentlyContinue })) {
+    New-AzResourceGroup -Name $Place.Rg -Location $Location | Out-Null
+    Write-Host "created resource group $($Place.Rg)"
+  }
 }
 
 # ---------------------------------------------------------------- storage
 
 Write-Step "Storage account and container"
-# The account named in .env is used only if it exists in the resource group. Otherwise the script uses its own account.
-$envConn = $settings["AZURE_STORAGE_CONNECTION_STRING"]
-$envAccount = $null
-if ($envConn -match 'AccountName=([^;]+)') {
-  $envAccountName = $Matches[1]
-  $envAccount = Get-IfExists { Get-AzStorageAccount -ResourceGroupName $ResourceGroup -Name $envAccountName -ErrorAction SilentlyContinue }
-}
-
 $storageCreated = $false
-if ($envAccount) {
-  Write-Host "Using the storage account from .env: $($envAccount.StorageAccountName)"
-  $storageName = $envAccount.StorageAccountName
-  $storageConn = $envConn
+if (-not $storageRef) {
+  Ensure-Group $storagePlace
+  Use-Subscription $storagePlace.Sub
+  New-AzStorageAccount -ResourceGroupName $storagePlace.Rg -Name $storageName -Location $Location `
+    -SkuName Standard_LRS -Kind StorageV2 -MinimumTlsVersion TLS1_2 -AllowBlobPublicAccess $false | Out-Null
+  $storageCreated = $true
+  Write-Host "Storage account $storageName created."
 }
 else {
-  if ($envConn) { Write-Host "The storage account in .env was not found in $ResourceGroup, so it is ignored." -ForegroundColor Yellow }
-  $storage = Get-IfExists { Get-AzStorageAccount -ResourceGroupName $ResourceGroup -Name $storageName -ErrorAction SilentlyContinue }
-  if ($storage) {
-    Write-Host "Storage account $storageName exists."
-  }
-  else {
-    New-AzStorageAccount -ResourceGroupName $ResourceGroup -Name $storageName -Location $Location `
-      -SkuName Standard_LRS -Kind StorageV2 -MinimumTlsVersion TLS1_2 -AllowBlobPublicAccess $false | Out-Null
-    $storageCreated = $true
-    Write-Host "Storage account $storageName created."
-  }
-  $key = (Get-AzStorageAccountKey -ResourceGroupName $ResourceGroup -Name $storageName)[0].Value
-  $storageConn = "DefaultEndpointsProtocol=https;AccountName=$storageName;AccountKey=$key;EndpointSuffix=core.windows.net"
+  Write-Host "Storage account $storageName exists. Reusing it."
 }
+Use-Subscription $storagePlace.Sub
+$key = (Get-AzStorageAccountKey -ResourceGroupName $storagePlace.Rg -Name $storageName)[0].Value
+$storageConn = "DefaultEndpointsProtocol=https;AccountName=$storageName;AccountKey=$key;EndpointSuffix=core.windows.net"
 
 # The container is created through the management API, so no data-plane call is needed.
-$container = Get-IfExists { Get-AzRmStorageContainer -ResourceGroupName $ResourceGroup -StorageAccountName $storageName -Name $StorageContainer -ErrorAction SilentlyContinue }
+$container = Get-IfExists { Get-AzRmStorageContainer -ResourceGroupName $storagePlace.Rg -StorageAccountName $storageName -Name $StorageContainer -ErrorAction SilentlyContinue }
 if ($container) {
   Write-Host "Container $StorageContainer exists."
 } else {
-  New-AzRmStorageContainer -ResourceGroupName $ResourceGroup -StorageAccountName $storageName -Name $StorageContainer -PublicAccess None | Out-Null
+  New-AzRmStorageContainer -ResourceGroupName $storagePlace.Rg -StorageAccountName $storageName -Name $StorageContainer -PublicAccess None | Out-Null
   Write-Host "Container $StorageContainer created."
 }
 
-# Storage key check: the storage connection string must match the account in the resource group.
-if ($storageConn -notmatch "^DefaultEndpointsProtocol=https;AccountName=$storageName;AccountKey=[^;]+;EndpointSuffix=core\.windows\.net$") {
-  throw "The storage connection string does not match storage account $storageName."
-}
-
 # .env needs the value when the account was just created, or when .env names an account that is not used.
-$staleEnvString = [bool]$envConn -and -not $envAccount
+$staleEnvString = [bool]$envConn -and -not $envAccountFound
 if ($storageCreated -or $staleEnvString) {
   # The file holds the storage key. It is listed in .gitignore and .dockerignore.
   $storageFile = Join-Path $PSScriptRoot "storage-connection.txt"
@@ -257,7 +298,8 @@ if ($storageCreated -or $staleEnvString) {
     "Azure Storage details created by deploy-azure.ps1",
     "KEEP THIS FILE PRIVATE. It contains the storage account key.",
     "",
-    "Resource group:   $ResourceGroup",
+    "Subscription:     $($storagePlace.Sub)",
+    "Resource group:   $($storagePlace.Rg)",
     "Storage account:  $storageName",
     "Container:        $StorageContainer",
     "Folder:           $StorageFolder",
@@ -278,23 +320,26 @@ if ($storageCreated -or $staleEnvString) {
 # ---------------------------------------------------------------- container registry
 
 Write-Step "Container registry $registryName"
-$registry = Get-IfExists { Get-AzContainerRegistry -ResourceGroupName $ResourceGroup -Name $registryName -ErrorAction SilentlyContinue }
-if ($registry) {
+Use-Subscription $registryPlace.Sub
+if ($registryRef) {
   Write-Host "exists"
+  $registry = Get-AzContainerRegistry -ResourceGroupName $registryPlace.Rg -Name $registryName
   # The admin user lets the container app pull the image, and lets docker push to it.
   if (-not $registry.AdminUserEnabled) {
-    Update-AzContainerRegistry -ResourceGroupName $ResourceGroup -Name $registryName -EnableAdminUser | Out-Null
+    Update-AzContainerRegistry -ResourceGroupName $registryPlace.Rg -Name $registryName -EnableAdminUser | Out-Null
     Write-Host "admin user turned on"
   }
 } else {
-  New-AzContainerRegistry -ResourceGroupName $ResourceGroup -Name $registryName -Location $Location -Sku Basic -EnableAdminUser | Out-Null
+  Ensure-Group $registryPlace
+  Use-Subscription $registryPlace.Sub
+  New-AzContainerRegistry -ResourceGroupName $registryPlace.Rg -Name $registryName -Location $Location -Sku Basic -EnableAdminUser | Out-Null
   Write-Host "created (Basic tier)"
 }
-$registry = Get-AzContainerRegistry -ResourceGroupName $ResourceGroup -Name $registryName
+$registry = Get-AzContainerRegistry -ResourceGroupName $registryPlace.Rg -Name $registryName
 if (-not $registry.LoginServer) { throw "Could not read registry $registryName." }
 $loginServer = $registry.LoginServer
 
-$registryCredential = Get-AzContainerRegistryCredential -ResourceGroupName $ResourceGroup -RegistryName $registryName
+$registryCredential = Get-AzContainerRegistryCredential -ResourceGroupName $registryPlace.Rg -RegistryName $registryName
 $registryUser = $registryCredential.Username
 $registryPassword = $registryCredential.Password
 if (-not $registryPassword) { $registryPassword = $registryCredential.Password2 }
@@ -308,7 +353,8 @@ Write-Step "Container Apps environment $EnvironmentName"
 # The environment and the app are created with New-AzResource, which sends the Azure Resource Manager request directly.
 # The environment has no log destination, so no Log Analytics workspace is created.
 $envType = "Microsoft.App/managedEnvironments"
-$managedEnv = Get-IfExists { Get-AzResource -ResourceGroupName $ResourceGroup -ResourceType $envType -Name $EnvironmentName -ApiVersion $ApiVersion -ErrorAction SilentlyContinue }
+Use-Subscription $environmentPlace.Sub
+$managedEnv = $envRef
 if ($managedEnv -and $managedEnv.Properties.provisioningState -ne "Succeeded") {
   # A failed earlier attempt can leave an environment that never finishes provisioning. Remove it and create it again.
   Write-Host "exists but is not provisioned (state: $($managedEnv.Properties.provisioningState)). Removing it."
@@ -316,7 +362,9 @@ if ($managedEnv -and $managedEnv.Properties.provisioningState -ne "Succeeded") {
   $managedEnv = $null
 }
 if (-not $managedEnv) {
-  New-AzResource -ResourceGroupName $ResourceGroup -ResourceType $envType -ResourceName $EnvironmentName `
+  Ensure-Group $environmentPlace
+  Use-Subscription $environmentPlace.Sub
+  New-AzResource -ResourceGroupName $environmentPlace.Rg -ResourceType $envType -ResourceName $EnvironmentName `
     -Location $Location -ApiVersion $ApiVersion -Properties @{} -Force | Out-Null
   Write-Host "created"
 } else {
@@ -326,7 +374,7 @@ if (-not $managedEnv) {
 # The app cannot be created before the environment is ready.
 $waited = 0
 while ($true) {
-  $managedEnv = Get-AzResource -ResourceGroupName $ResourceGroup -ResourceType $envType -Name $EnvironmentName -ApiVersion $ApiVersion
+  $managedEnv = Get-AzResource -ResourceGroupName $environmentPlace.Rg -ResourceType $envType -Name $EnvironmentName -ApiVersion $ApiVersion
   $state = $managedEnv.Properties.provisioningState
   if ($state -eq "Succeeded") { break }
   if ($state -eq "Failed" -or $state -eq "Canceled") { throw "Container Apps environment $EnvironmentName ended in state $state. Delete it in the portal and run the script again." }
@@ -466,24 +514,25 @@ function New-AppProperties([string]$PublicUrl) {
 
 Write-Step "Container app $AppName"
 # -Force replaces the app with these settings. It creates the app if it is missing, and updates it if it exists.
-$existingApp = Get-IfExists { Get-AzResource -ResourceGroupName $ResourceGroup -ResourceType "Microsoft.App/containerApps" -Name $AppName -ApiVersion $ApiVersion -ErrorAction SilentlyContinue }
 $publicUrl = ""
-if ($existingApp -and $existingApp.Properties.configuration.ingress.fqdn) {
-  $publicUrl = "https://$($existingApp.Properties.configuration.ingress.fqdn)"
+if ($appRef -and $appRef.Properties.configuration.ingress.fqdn) {
+  $publicUrl = "https://$($appRef.Properties.configuration.ingress.fqdn)"
 }
 
-New-AzResource -ResourceGroupName $ResourceGroup -ResourceType "Microsoft.App/containerApps" -ResourceName $AppName `
+if (-not $appRef) { Ensure-Group $appPlace }
+Use-Subscription $appPlace.Sub
+New-AzResource -ResourceGroupName $appPlace.Rg -ResourceType "Microsoft.App/containerApps" -ResourceName $AppName `
   -Location $Location -ApiVersion $ApiVersion -Properties (New-AppProperties $publicUrl) -Force | Out-Null
 Write-Host "created or updated (image: $image)"
 
 # The public address is known only after the app exists. For a new app, read it and set the SWAT board address.
-$app = Get-AzResource -ResourceGroupName $ResourceGroup -ResourceType "Microsoft.App/containerApps" -Name $AppName -ApiVersion $ApiVersion
+$app = Get-AzResource -ResourceGroupName $appPlace.Rg -ResourceType "Microsoft.App/containerApps" -Name $AppName -ApiVersion $ApiVersion
 $fqdn = $app.Properties.configuration.ingress.fqdn
 if (-not $fqdn) { $fqdn = $app.Properties.latestRevisionFqdn }
 $deadline = (Get-Date).AddMinutes(3)
 while (-not $fqdn -and (Get-Date) -lt $deadline) {
   Start-Sleep -Seconds 10
-  $app = Get-AzResource -ResourceGroupName $ResourceGroup -ResourceType "Microsoft.App/containerApps" -Name $AppName -ApiVersion $ApiVersion
+  $app = Get-AzResource -ResourceGroupName $appPlace.Rg -ResourceType "Microsoft.App/containerApps" -Name $AppName -ApiVersion $ApiVersion
   $fqdn = $app.Properties.configuration.ingress.fqdn
   if (-not $fqdn) { $fqdn = $app.Properties.latestRevisionFqdn }
 }
@@ -491,7 +540,7 @@ if (-not $fqdn) { throw "The app was created, but its public address is not know
 
 if ($publicUrl -ne "https://$fqdn") {
   Write-Step "Setting the SWAT board address to https://$fqdn"
-  New-AzResource -ResourceGroupName $ResourceGroup -ResourceType "Microsoft.App/containerApps" -ResourceName $AppName `
+  New-AzResource -ResourceGroupName $appPlace.Rg -ResourceType "Microsoft.App/containerApps" -ResourceName $AppName `
     -Location $Location -ApiVersion $ApiVersion -Properties (New-AppProperties "https://$fqdn") -Force | Out-Null
 }
 

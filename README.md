@@ -28,6 +28,7 @@ This replaces the older Selenium version (`P1-ui-monitor`). There is no browser,
 12. [Troubleshooting](#12-troubleshooting)
 13. [Security notes](#13-security-notes)
 14. [Deploy to Azure Container Apps (free tier)](#14-deploy-to-azure-container-apps-free-tier)
+15. [Option B: deploy as an Azure Function App](#15-option-b-deploy-as-an-azure-function-app)
 
 ---
 
@@ -675,6 +676,46 @@ az group delete --name $RG --yes --no-wait
 | Costs are higher than expected | Check `minReplicas` is `1` (scale to zero stops the monitor), and check the region in the pricing calculator |
 
 ---
+
+## 15. Option B: deploy as an Azure Function App
+
+The current deployment (section 14) runs the monitor as one always-on container. This section describes a second option, an **Azure Function App**. Read the limits first, because the monitor does not fit the Functions model as it stands.
+
+### What changes
+
+| Part of the monitor | Container App (section 14) | Function App |
+|---|---|---|
+| 15-minute check | A loop inside the container | A **timer trigger**, schedule `0 */15 * * * *` (NCRONTAB, UTC) |
+| Monthly report and clean-up | A check at the start of the loop | A second **timer trigger**, schedule `0 0 0 1 * *` (00:00 on the 1st, UTC) |
+| SWAT board (HTTP on port 8080) | A small HTTP server started inside the container | **Not supported as it is.** A Function App does not run an arbitrary server on port 8080. See the two choices below |
+| Data | Blob storage | Same blob storage (the connection string is the same) |
+| Settings and secrets | Container Apps secrets | Function App **application settings** (use Key Vault references for secrets) |
+
+### The SWAT board needs one of two choices
+
+1. **Custom container on a Premium or Dedicated plan.** The same Docker image runs in the Function App, and the board works unchanged. The Consumption plan does not run custom containers, so this is a paid plan. Check the current options and prices for custom containers before you choose this.
+2. **Rewrite the board as HTTP-triggered functions.** Each board endpoint (`/`, `/api/incidents`, `/api/set`, `/api/notes`, `/incident/...`) becomes an HTTP-triggered function. This is the only way to keep the board on the free Consumption plan. It is a code change, not a settings change.
+
+If you only need the alerts and the monthly report, the timer triggers alone run on the Consumption plan. Host the board somewhere else, or keep it in the Container App.
+
+### Steps (outline)
+
+1. **Create the storage account** for the Function App's own runtime files (`AzureWebJobsStorage`). This is separate from the data storage account used by the monitor.
+2. **Create the Function App:** Python 3.12, Linux, and the plan you chose (Consumption for timers only, Premium or Dedicated for the custom container).
+3. **Add the application settings** from `.env`: `SN_INSTANCE`, `SN_CLIENT_ID`, `SN_CLIENT_SECRET`, `AZURE_STORAGE_CONNECTION_STRING`, `AZURE_STORAGE_CONTAINER`, `AZURE_STORAGE_FOLDER`, `TEAMS_WEBHOOK_URLS`, and any email settings. For secrets, store them in Key Vault and reference them.
+4. **Add the timer functions**, one that calls `check_once(config)` every 15 minutes and one that calls `run_monthly_report_if_due(config)` every hour. The hourly job runs the report only on the 1st, so the schedule is `0 0 * * * *`. Make sure the timer triggers cannot overlap: use one function app instance.
+5. **Deploy the code** with Azure Functions Core Tools (`func azure functionapp publish <app-name>`), or with the deployment options in the portal.
+6. **Check the logs** in the Function App under **Monitor**, and confirm the next run times in the timer trigger's details.
+
+### Costs and limits (check before you choose)
+
+- The **Consumption plan** has a monthly free grant for executions and GB-seconds. Timers that run every 15 minutes and once an hour are far below it. Confirm the current figures in the [Azure Functions pricing](https://azure.microsoft.com/pricing/details/functions/) page.
+- **Premium** and **Dedicated** plans have a fixed monthly cost, so the free-tier estimate in `AZURE-DEPLOYMENT.html` does not apply to them.
+- Only **one** instance of the timer should run. Two instances would send duplicate alerts.
+
+### Recommendation
+
+Keep the Container App (section 14) for the monitor and the board. It is the only option that runs the code exactly as it is tested, and it keeps the board and the loop together. Use the Function App option only if your company requires functions, and plan for the board rewrite or the paid plan.
 
 ## Files in this folder
 

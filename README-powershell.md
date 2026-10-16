@@ -44,6 +44,19 @@ The script stops if `SN_INSTANCE`, `SN_CLIENT_ID` or `SN_CLIENT_SECRET` is empty
 
 ---
 
+## Where each resource lives
+
+The script searches only the subscription and resource group named for each resource. It does not search other subscriptions.
+
+| Resource | Subscription parameter | Resource group parameter |
+|---|---|---|
+| Storage account | -StorageSubscriptionId | -StorageResourceGroup |
+| Container registry | -RegistrySubscriptionId | -RegistryResourceGroup |
+| Container Apps environment | -EnvironmentSubscriptionId | -EnvironmentResourceGroup |
+| Container app | -AppSubscriptionId | -AppResourceGroup |
+
+Leave a pair empty to use -SubscriptionId and -ResourceGroup. The app must be in the same subscription as its environment, and the script stops if they differ. If a resource is found in its place, it is reused. If not, it is created there.
+
 ## Naming and reuse
 
 Names are `stp1apimon<suffix>` (storage account) and `acrp1apimon<suffix>` (registry).
