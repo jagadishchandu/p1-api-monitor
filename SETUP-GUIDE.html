@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P1 API Monitor - Setup Guide</title>
+<style>
+  :root {
+    --bg: #f3f6fb; --card: #ffffff; --ink: #1b2b44; --muted: #56657a;
+    --accent: #1e4fb8; --line: #dfe6f1; --code-bg: #0f1b2d; --code-ink: #e6edf7;
+    --warn-bg: #fff4e0; --warn-ink: #8a5a00; --ok-bg: #e6f6ec; --ok-ink: #17633a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e1622; --card: #162232; --ink: #e6edf7; --muted: #9fb0c7;
+      --accent: #7aa7ff; --line: #26364d; --code-bg: #0a111b; --code-ink: #dbe6f5;
+      --warn-bg: #3a2c12; --warn-ink: #ffd27a; --ok-bg: #123322; --ok-ink: #9ee6b8;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1622; --card: #162232; --ink: #e6edf7; --muted: #9fb0c7;
+    --accent: #7aa7ff; --line: #26364d; --code-bg: #0a111b; --code-ink: #dbe6f5;
+    --warn-bg: #3a2c12; --warn-ink: #ffd27a; --ok-bg: #123322; --ok-ink: #9ee6b8;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Segoe UI", Arial, sans-serif; line-height: 1.55; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 24px 16px 60px; }
+  header { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; margin-bottom: 18px; }
+  h1 { margin: 0 0 6px; font-size: 1.7rem; }
+  h2 { margin: 0 0 10px; font-size: 1.25rem; color: var(--accent); }
+  h3 { margin: 18px 0 6px; font-size: 1.02rem; }
+  p, li { color: var(--ink); }
+  .lead { color: var(--muted); margin: 0; }
+  nav { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 20px; margin-bottom: 18px; }
+  nav h2 { font-size: 1rem; }
+  nav ol { margin: 0; padding-left: 20px; columns: 2; }
+  nav a { color: var(--accent); text-decoration: none; }
+  nav a:hover { text-decoration: underline; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 24px; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 4px; font-size: 0.93rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; background: transparent; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 0.9em; background: var(--line); padding: 1px 5px; border-radius: 5px; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 12px 14px; border-radius: 10px; overflow-x: auto; position: relative; }
+  pre code { background: none; padding: 0; color: inherit; font-size: 0.88rem; }
+  .copy { position: absolute; top: 8px; right: 8px; font-size: 0.75rem; border: 0; border-radius: 6px; padding: 3px 8px; cursor: pointer; background: #2b3b55; color: #fff; }
+  .note { border-radius: 10px; padding: 10px 14px; margin: 12px 0; }
+  .note.warn { background: var(--warn-bg); color: var(--warn-ink); }
+  .note.ok { background: var(--ok-bg); color: var(--ok-ink); }
+  .step { display: flex; gap: 12px; margin: 10px 0; }
+  .num { flex: 0 0 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center; font-size: 0.9rem; }
+  .checklist li { list-style: none; margin: 6px 0; }
+  .checklist li::before { content: "\2610  "; color: var(--accent); font-size: 1.05rem; }
+  .checklist { padding-left: 0; }
+  @media (max-width: 640px) {
+    nav ol { columns: 1; }
+    section, header, nav { padding: 16px; }
+    h1 { font-size: 1.4rem; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>P1 API Monitor - Setup Guide</h1>
+  <p class="lead">Watches ServiceNow incidents through the REST Table API, sends Teams and email alerts, and runs the SWAT board on port 8080. Runs in Docker.</p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#prereq">What you need</a></li>
+    <li><a href="#account">ServiceNow OAuth application</a></li>
+    <li><a href="#oauth">OAuth option (recommended)</a></li>
+    <li><a href="#check">Check the API access</a></li>
+    <li><a href="#teams">Teams webhook</a></li>
+    <li><a href="#smtp">Email (SMTP)</a></li>
+    <li><a href="#env">Create the .env file</a></li>
+    <li><a href="#docker">Build and run with Docker</a></li>
+    <li><a href="#board">Open the SWAT board</a></li>
+    <li><a href="#test">Test it</a></li>
+    <li><a href="#behave">How it behaves</a></li>
+    <li><a href="#settings">Settings reference</a></li>
+    <li><a href="#trouble">Troubleshooting</a></li>
+    <li><a href="#security">Security notes</a></li>
+  </ol>
+</nav>
+
+<section id="prereq">
+  <h2>1. What you need</h2>
+  <table>
+    <tr><th>Item</th><th>What it is</th><th>Who provides it</th></tr>
+    <tr><td>ServiceNow instance name</td><td>The part before <code>.service-now.com</code>, e.g. <code>acmecorp</code></td><td>You</td></tr>
+    <tr><td>OAuth application</td><td>A Client ID and Client Secret for an OAuth application that runs as a read-only service account with read access to the <b>incident</b> table</td><td>ServiceNow admin</td></tr>
+    <tr><td>Docker Desktop / Engine</td><td>Runs the container</td><td>Install from docker.com</td></tr>
+    <tr><td>Network access</td><td>Outbound HTTPS to <code>&lt;instance&gt;.service-now.com</code>, plus your Teams flow and SMTP server if used</td><td>IT / firewall team</td></tr>
+    <tr><td>Teams webhook URL(s) (optional)</td><td>Power Automate "When a HTTP request is received" flow URL</td><td>Teams channel owner</td></tr>
+    <tr><td>SMTP details (optional)</td><td>Host, port, login and a permitted sender for email alerts</td><td>Mail team</td></tr>
+    <tr><td>Port 8080 free</td><td>The SWAT board is served here</td><td>Your machine</td></tr>
+  </table>
+  <div class="note ok">You do not need Python, Chrome or Selenium on the machine. Docker runs everything.</div>
+</section>
+
+<section id="account">
+  <h2>2. ServiceNow OAuth application</h2>
+  <p>The monitor logs in with <b>OAuth 2.0 client credentials</b> only. It does not use a user name or password. ServiceNow gives a short-lived token, and the monitor refreshes it automatically.</p>
+  <h3>Step 1: the service account</h3>
+  <p>Ask your ServiceNow admin to create a dedicated user that the OAuth application runs as:</p>
+  <ul class="checklist">
+    <li>User ID, e.g. <code>svc_p1_api_monitor</code></li>
+    <li><b>Web service access only</b> ticked (the account is used only by the API)</li>
+    <li>Active</li>
+    <li>A shared mailbox or team address as the contact</li>
+    <li>Read access to the <b>incident</b> table. Usually the <code>itil</code> role, or a read ACL. No write or admin role</li>
+  </ul>
+  <h3>Step 2: the OAuth application</h3>
+  <div class="step"><div class="num">1</div><div>Admin opens <b>System OAuth &gt; Application Registry &gt; New</b> and chooses <b>Create an OAuth API endpoint for external clients</b>.</div></div>
+  <div class="step"><div class="num">2</div><div>Name it (e.g. <code>P1 API Monitor</code>) and keep it <b>Active</b>.</div></div>
+  <div class="step"><div class="num">3</div><div>Enable the <b>client credentials</b> option (wording varies by release). Set the <b>user it runs as</b> to the service account from step 1.</div></div>
+  <div class="step"><div class="num">4</div><div>Save and copy the <b>Client ID</b> and <b>Client Secret</b>. Put them in <code>.env</code> as <code>SN_CLIENT_ID</code> and <code>SN_CLIENT_SECRET</code>.</div></div>
+  <div class="note warn">If the client secret is rotated or expires, the monitor fails with HTTP 401 until <code>.env</code> is updated. If your release has no client credentials option, the monitor cannot run on it. Ask the admin to check the release.</div>
+</section>
+
+<section id="check">
+  <h2>3. Check the OAuth login and API access</h2>
+  <p>Test the credentials before starting Docker. Replace the placeholders.</p>
+  <h3>Git Bash, macOS or Linux</h3>
+  <pre><button class="copy" type="button">Copy</button><code>TOKEN=$(curl -s -X POST "https://yourinstance.service-now.com/oauth_token.do" \
+  -d "grant_type=client_credentials&amp;client_id=YOUR_CLIENT_ID&amp;client_secret=YOUR_CLIENT_SECRET" \
+  | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+curl "https://yourinstance.service-now.com/api/now/table/incident?sysparm_limit=3&amp;sysparm_fields=number,state,priority" \
+  -H "Authorization: Bearer $TOKEN" -H "Accept: application/json"</code></pre>
+  <h3>Windows PowerShell</h3>
+  <pre><button class="copy" type="button">Copy</button><code>$tok = (Invoke-RestMethod -Method Post -Uri "https://yourinstance.service-now.com/oauth_token.do" -Body @{grant_type="client_credentials"; client_id="YOUR_CLIENT_ID"; client_secret="YOUR_CLIENT_SECRET"}).access_token
+Invoke-RestMethod -Uri "https://yourinstance.service-now.com/api/now/table/incident?sysparm_limit=3&amp;sysparm_fields=number,state,priority" -Headers @{Authorization="Bearer $tok"; Accept="application/json"}</code></pre>
+  <table>
+    <tr><th>Result</th><th>Meaning</th></tr>
+    <tr><td>Result list with incidents</td><td>Good</td></tr>
+    <tr><td>HTTP 401</td><td>Wrong Client ID or secret, OAuth application inactive, or it does not run as the service account</td></tr>
+    <tr><td>HTTP 403</td><td>Account can get a token but cannot read incidents. Ask for a role check</td></tr>
+    <tr><td>HTTP 404</td><td>Wrong instance name</td></tr>
+  </table>
+</section>
+
+<section id="teams">
+  <h2>4. Teams webhook (optional)</h2>
+  <div class="step"><div class="num">1</div><div>In Power Automate, create or reuse a flow that starts with <b>When a HTTP request is received</b>.</div></div>
+  <div class="step"><div class="num">2</div><div>Copy the <b>HTTP POST URL</b>. Treat it like a password.</div></div>
+  <div class="step"><div class="num">3</div><div>Put it in <code>TEAMS_WEBHOOK_URLS</code>. Separate several URLs with commas.</div></div>
+  <p>Without a webhook, incidents are still tracked and the SWAT board still works.</p>
+</section>
+
+<section id="smtp">
+  <h2>5. Email over SMTP (optional)</h2>
+  <p>Ask your mail team for:</p>
+  <ul>
+    <li>SMTP host, e.g. <code>smtp.yourcompany.com</code></li>
+    <li>Port: usually <code>587</code> with STARTTLS, or <code>25</code> for an internal relay</li>
+    <li>Login details, if the server requires them</li>
+    <li>A sender address the server allows</li>
+  </ul>
+  <p>Leave <code>EMAIL_TO</code> empty to turn email off.</p>
+</section>
+
+<section id="env">
+  <h2>6. Create the .env file</h2>
+  <p>The image contains no secrets. Settings are read from <code>.env</code> when the container starts.</p>
+  <pre><button class="copy" type="button">Copy</button><code># Windows
+copy .env.example .env
+# Mac / Linux
+cp .env.example .env</code></pre>
+  <p>Minimum values:</p>
+  <pre><button class="copy" type="button">Copy</button><code>SN_INSTANCE=acmecorp
+SN_CLIENT_ID=your-oauth-client-id
+SN_CLIENT_SECRET=your-oauth-client-secret
+AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net</code></pre>
+  <h3>Azure Storage</h3>
+  <p>The monitor keeps <code>incidents.json</code>, <code>swat_status.json</code> and <code>swat_details/</code> in one blob container of an Azure Storage account. Get the connection string from the portal: storage account &gt; <b>Security + networking</b> &gt; <b>Access keys</b> &gt; <b>Connection string</b>.</p>
+  <table>
+    <tr><th>Setting</th><th>Meaning</th></tr>
+    <tr><td><code>AZURE_STORAGE_CONNECTION_STRING</code></td><td>Required. Contains the account key, so keep it secret</td></tr>
+    <tr><td><code>AZURE_STORAGE_CONTAINER</code></td><td>Blob container. Default <code>p1-api-monitor</code></td></tr>
+    <tr><td><code>AZURE_STORAGE_FOLDER</code></td><td>Folder inside the container. Default <code>p1-api-monitor</code></td></tr>
+  </table>
+  <div class="note ok"><b>Automatic setup:</b> the container and folders are created on first start if they are missing. You do not need to create them by hand.</div>
+  <div class="note warn">Never commit <code>.env</code> to git or share it. It is excluded by <code>.gitignore</code> and <code>.dockerignore</code>.</div>
+</section>
+
+<section id="docker">
+  <h2>7. Build and run with Docker</h2>
+  <p>From the <code>P1-api-monitor</code> folder:</p>
+  <pre><button class="copy" type="button">Copy</button><code>docker compose up -d --build</code></pre>
+  <p>Host port 8080 maps to container port 8080.</p>
+  <h3>Useful commands</h3>
+  <table>
+    <tr><th>Command</th><th>What it does</th></tr>
+    <tr><td><code>docker compose logs -f</code></td><td>Live log</td></tr>
+    <tr><td><code>docker compose up -d</code></td><td>Apply changes to <code>.env</code> (recreates the container)</td></tr>
+    <tr><td><code>docker compose down</code></td><td>Stop and remove the container. Data is kept</td></tr>
+    <tr><td><code>docker compose run --rm p1-api-monitor python monitor.py --check-once</code></td><td>One check, then exit</td></tr>
+    <tr><td><code>docker compose run --rm p1-api-monitor python monitor.py --test-notify</code></td><td>Send a test P1 card and email</td></tr>
+  </table>
+  <div class="note ok"><code>docker build</code> does not read <code>.env</code>. Settings are supplied when the container runs.</div>
+  <h3>Where data is kept</h3>
+  <table>
+    <tr><th>Item</th><th>Location in Azure Storage</th></tr>
+    <tr><td><code>incidents.json</code></td><td><code>&lt;AZURE_STORAGE_FOLDER&gt;/incidents.json</code></td></tr>
+    <tr><td><code>swat_status.json</code></td><td><code>&lt;AZURE_STORAGE_FOLDER&gt;/swat_status.json</code></td></tr>
+    <tr><td><code>swat_details/</code></td><td><code>&lt;AZURE_STORAGE_FOLDER&gt;/swat_details/&lt;INC number&gt;.json</code></td></tr>
+  </table>
+  <p>The container keeps nothing locally, so it can be rebuilt or moved without losing data. Everyone who uses the board shares the same data.</p>
+</section>
+
+<section id="board">
+  <h2>8. Open the SWAT board</h2>
+  <ul>
+    <li>On the host: <code>http://localhost:8080</code></li>
+    <li>From other computers: <code>http://&lt;host-name-or-ip&gt;:8080</code> (firewall must allow port 8080)</li>
+  </ul>
+  <p>Set <code>SWAT_BOARD_PUBLIC_URL</code> to the address other people use. The <b>Open SWAT board</b> button on Teams cards uses it.</p>
+  <h3>What the board shows</h3>
+  <ul>
+    <li>Filters: <b>All</b>, <b>In Progress</b>, <b>On Hold</b>, <b>Resolved</b>, each with a count</li>
+    <li>A state label on each card with the time it changed</li>
+    <li>For each team (Infra Ops, Container Ops, Network Ops): Required or Not required, and who joined</li>
+    <li>A details and notes page per incident, with the intake form and Excel export</li>
+  </ul>
+  <div class="note warn">The board has no login. Users type their name before saving changes. Limit access to the network.</div>
+</section>
+
+<section id="test">
+  <h2>9. Test it</h2>
+  <div class="step"><div class="num">1</div><div>Send a test P1 card and email: <code>docker compose run --rm p1-api-monitor python monitor.py --test-notify</code></div></div>
+  <div class="step"><div class="num">2</div><div>Run one live check: <code>docker compose run --rm p1-api-monitor python monitor.py --check-once</code></div></div>
+  <div class="step"><div class="num">3</div><div>Confirm the board responds: <code>curl http://localhost:8080/api/incidents</code></div></div>
+</section>
+
+<section id="behave">
+  <h2>10. How it behaves</h2>
+  <p>Every <b>15 minutes</b> (<code>MONITOR_INTERVAL_MINUTES</code>) the monitor reads In Progress, On Hold and Resolved incidents from ServiceNow and compares them with <code>incidents.json</code>.</p>
+  <table>
+    <tr><th>What happened</th><th>What the monitor does</th></tr>
+    <tr><td>New In Progress incident</td><td>New incident alert, then stored</td></tr>
+    <tr><td>Priority changed</td><td>Priority changed alert</td></tr>
+    <tr><td>In Progress moved to On Hold</td><td>Update alert, state stored as On Hold</td></tr>
+    <tr><td>In Progress moved to Resolved</td><td>Update alert, state stored as Resolved</td></tr>
+    <tr><td>On Hold or Resolved back to In Progress</td><td>Treated as new and alerted again</td></tr>
+    <tr><td>Closed, Canceled, or no longer in these states</td><td>Removed from <code>incidents.json</code></td></tr>
+  </table>
+  <p>An alert that fails on every channel is retried on the next check.</p>
+</section>
+
+<section id="settings">
+  <h2>11. Settings reference</h2>
+  <table>
+    <tr><th>Variable</th><th>Required</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>SN_INSTANCE</code></td><td>Yes</td><td>-</td><td>Instance name only</td></tr>
+    <tr><td><code>SN_CLIENT_ID</code> / <code>SN_CLIENT_SECRET</code></td><td>Yes</td><td>-</td><td>OAuth client credentials</td></tr>
+    <tr><td><code>AZURE_STORAGE_CONNECTION_STRING</code></td><td>Yes</td><td>-</td><td>Azure Storage connection string. Contains the account key</td></tr>
+    <tr><td><code>AZURE_STORAGE_CONTAINER</code> / <code>AZURE_STORAGE_FOLDER</code></td><td>No</td><td><code>p1-api-monitor</code></td><td>Blob container and folder. Both are created automatically if missing</td></tr>
+    <tr><td><code>TEAMS_WEBHOOK_URLS</code></td><td>No</td><td>empty</td><td>Power Automate URL(s), comma separated</td></tr>
+    <tr><td><code>TEAMS_VERIFY_SSL</code></td><td>No</td><td><code>true</code></td><td>Set <code>false</code> only as a last resort behind a TLS proxy</td></tr>
+    <tr><td><code>EMAIL_TO</code> / <code>EMAIL_CC</code> / <code>EMAIL_BCC</code></td><td>No</td><td>empty</td><td>Email recipients, comma separated</td></tr>
+    <tr><td><code>SMTP_HOST</code>, <code>SMTP_PORT</code>, <code>SMTP_STARTTLS</code></td><td>If email</td><td><code>587</code>, <code>true</code></td><td>SMTP server settings</td></tr>
+    <tr><td><code>SMTP_USER</code> / <code>SMTP_PASSWORD</code> / <code>SMTP_FROM</code></td><td>No</td><td>empty</td><td>SMTP login and sender</td></tr>
+    <tr><td><code>MONITOR_INTERVAL_MINUTES</code></td><td>No</td><td><code>15</code></td><td>Minutes between checks</td></tr>
+    <tr><td><code>SWAT_BOARD_ENABLED</code> / <code>SWAT_BOARD_PORT</code></td><td>No</td><td><code>true</code> / <code>8080</code></td><td>SWAT board on/off and port</td></tr>
+    <tr><td><code>SWAT_BOARD_PUBLIC_URL</code></td><td>No</td><td>empty</td><td>Address on the Teams "Open SWAT board" button</td></tr>
+  </table>
+</section>
+
+<section id="trouble">
+  <h2>12. Troubleshooting</h2>
+  <table>
+    <tr><th>Symptom</th><th>What to check</th></tr>
+    <tr><td>missing required environment variable</td><td><code>.env</code> is missing or a name is misspelled. Run <code>docker compose config</code></td></tr>
+    <tr><td>HTTP 401 from ServiceNow</td><td>Wrong Client ID or secret, OAuth application inactive, or not running as the service account</td></tr>
+    <tr><td>Could not create the storage container</td><td>The connection string is wrong or lacks permission. Copy it again from the portal</td></tr>
+    <tr><td>AuthenticationFailed from Azure Storage</td><td>The account key was rotated. Copy the connection string again</td></tr>
+    <tr><td>HTTP 403 from ServiceNow</td><td>Account lacks read access to the incident table</td></tr>
+    <tr><td>OAuth token request failed</td><td>Client ID or secret wrong, or OAuth application inactive</td></tr>
+    <tr><td>Could not reach service-now.com</td><td>No internet or proxy access from the host, or wrong instance name</td></tr>
+    <tr><td>SWAT board could not start on port 8080</td><td>Another program uses the port. Stop it or change the mapping</td></tr>
+    <tr><td>Open SWAT board button fails</td><td>Set <code>SWAT_BOARD_PUBLIC_URL</code> to an address others can reach</td></tr>
+    <tr><td>Teams webhook rejected</td><td>Wrong URL or flow is off. Check the flow run history in Power Automate</td></tr>
+    <tr><td>TLS certificate error to Teams</td><td>Install the corporate root CA. <code>TEAMS_VERIFY_SSL=false</code> is a last resort</td></tr>
+    <tr><td>No alerts</td><td>Normal when nothing changed since the last check</td></tr>
+  </table>
+</section>
+
+<section id="security">
+  <h2>13. Security notes</h2>
+  <ul>
+    <li><code>.env</code> holds the OAuth client secret, the storage connection string and webhook secrets. Keep it on the server only.</li>
+    <li>Use a read-only service account.</li>
+    <li>Prefer OAuth. The access token is kept in memory only.</li>
+    <li>Rotate the OAuth client secret and the storage account key on your admin's schedule, then run <code>docker compose up -d</code>.</li>
+    <li>The SWAT board has no login. Limit network access or put it behind an authenticated reverse proxy.</li>
+    <li>The Teams webhook URL is a secret. Anyone with it can post to the channel.</li>
+    <li>The container runs as a non-root user.</li>
+  </ul>
+</section>
+
+</div>
+<script>
+  document.querySelectorAll(".copy").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var text = btn.parentElement.querySelector("code").innerText;
+      navigator.clipboard.writeText(text).then(function () {
+        btn.textContent = "Copied";
+        setTimeout(function () { btn.textContent = "Copy"; }, 1500);
+      });
+    });
+  });
+</script>
+</body>
+</html>

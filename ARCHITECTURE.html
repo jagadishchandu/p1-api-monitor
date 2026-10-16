@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P1 API Monitor - Architecture</title>
+<style>
+  :root {
+    --bg: #eef3fa; --card: #ffffff; --ink: #14233b; --muted: #5b6b82; --line: #e1e8f2;
+    --accent: #1e4fb8; --accent-2: #0f9d8a; --accent-soft: #e8efff;
+    --ok: #17633a; --ok-soft: #e4f6ec; --warn: #8a5a00; --warn-soft: #fff3dc;
+    --red: #b42318; --red-soft: #fde7e4; --shadow: 0 10px 30px rgba(20, 40, 80, 0.08);
+    --box: #ffffff; --arrow: #5b6b82;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b1320; --card: #132033; --ink: #e8eef8; --muted: #9fb0c7; --line: #22334d;
+      --accent: #7aa7ff; --accent-2: #46d3bd; --accent-soft: #1a2c4a;
+      --ok: #9ee6b8; --ok-soft: #14301f; --warn: #ffd27a; --warn-soft: #34290f;
+      --red: #ffb4ab; --red-soft: #3a1816; --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+      --box: #1a2a42; --arrow: #9fb0c7;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1320; --card: #132033; --ink: #e8eef8; --muted: #9fb0c7; --line: #22334d;
+    --accent: #7aa7ff; --accent-2: #46d3bd; --accent-soft: #1a2c4a;
+    --ok: #9ee6b8; --ok-soft: #14301f; --warn: #ffd27a; --warn-soft: #34290f;
+    --red: #ffb4ab; --red-soft: #3a1816; --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    --box: #1a2a42; --arrow: #9fb0c7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Segoe UI", system-ui, Arial, sans-serif; line-height: 1.55;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 18px 64px; }
+
+  /* Hero */
+  .hero {
+    margin: 18px 0 18px; border-radius: 22px; padding: 34px 32px 30px; color: #fff;
+    background: linear-gradient(135deg, #1e4fb8 0%, #0f9d8a 100%);
+    box-shadow: var(--shadow); position: relative; overflow: hidden;
+  }
+  .hero::after {
+    content: ""; position: absolute; right: -60px; top: -60px; width: 240px; height: 240px;
+    border-radius: 50%; background: rgba(255, 255, 255, 0.12);
+  }
+  .eyebrow { text-transform: uppercase; letter-spacing: .14em; font-size: .72rem; font-weight: 700; opacity: .85; }
+  .hero h1 { margin: 6px 0 8px; font-size: 2rem; line-height: 1.2; }
+  .hero p { margin: 0; max-width: 640px; opacity: .92; font-size: 1.02rem; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .stat {
+    background: var(--card); border-radius: 16px; padding: 16px 18px; box-shadow: var(--shadow);
+    border: 1px solid var(--line);
+  }
+  .stat b { display: block; font-size: 1.6rem; color: var(--accent); }
+  .stat span { color: var(--muted); font-size: .88rem; }
+
+  section {
+    background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+    padding: 24px 26px; margin-bottom: 18px; box-shadow: var(--shadow);
+  }
+  h2 { margin: 0 0 4px; font-size: 1.25rem; }
+  .kicker { color: var(--muted); margin: 0 0 16px; font-size: .95rem; }
+
+  /* Benefit cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .card {
+    background: var(--box); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px;
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+  .icon {
+    width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+    background: var(--accent-soft); color: var(--accent); font-size: 1.2rem; margin-bottom: 10px;
+  }
+  .card h3 { margin: 0 0 4px; font-size: 1rem; }
+  .card p { margin: 0; color: var(--muted); font-size: .92rem; }
+
+  /* Diagram */
+  .diagram { border-radius: 14px; background: linear-gradient(180deg, var(--accent-soft), transparent 70%); padding: 10px; }
+  svg { width: 100%; height: auto; display: block; }
+  svg text { font-family: "Segoe UI", system-ui, Arial, sans-serif; fill: var(--ink); }
+  svg .sub { fill: var(--muted); font-size: 12.5px; }
+  svg .title { font-size: 15px; font-weight: 700; }
+  svg .lbl { font-size: 11.5px; fill: var(--muted); font-weight: 600; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: .86rem; color: var(--muted); }
+  .legend i { display: inline-block; width: 22px; height: 0; border-top: 2px solid var(--arrow); vertical-align: middle; margin-right: 6px; }
+  .legend i.dash { border-top-style: dashed; }
+
+  /* Lifecycle strip */
+  .flow { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+  .state {
+    flex: 1 1 150px; border-radius: 14px; padding: 14px 14px; border: 1px solid var(--line);
+    background: var(--box); position: relative; margin: 4px;
+  }
+  .state .dot { width: 12px; height: 12px; border-radius: 50%; margin-bottom: 8px; }
+  .state h3 { margin: 0 0 4px; font-size: .98rem; }
+  .state p { margin: 0; color: var(--muted); font-size: .86rem; }
+  .s-new .dot { background: var(--accent); } .s-new { border-top: 4px solid var(--accent); }
+  .s-hold .dot { background: var(--warn); } .s-hold { border-top: 4px solid var(--warn); }
+  .s-res .dot { background: var(--ok); } .s-res { border-top: 4px solid var(--ok); }
+  .s-gone .dot { background: var(--red); } .s-gone { border-top: 4px solid var(--red); }
+  .note-strip {
+    margin-top: 14px; padding: 12px 16px; border-radius: 12px; background: var(--accent-soft);
+    color: var(--accent); font-size: .92rem;
+  }
+
+  /* Steps */
+  .steps { list-style: none; margin: 0; padding: 0; counter-reset: s; display: grid; gap: 10px; }
+  .steps li {
+    counter-increment: s; display: grid; grid-template-columns: 44px 1fr; gap: 14px; align-items: start;
+    padding: 12px 14px; border-radius: 14px; background: var(--box); border: 1px solid var(--line);
+  }
+  .steps li::before {
+    content: counter(s); width: 44px; height: 44px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; font-weight: 800; font-size: 1.05rem;
+  }
+  .steps b { display: block; }
+  .steps span { color: var(--muted); font-size: .92rem; }
+
+  /* Who / data */
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .pill-list { display: flex; flex-direction: column; gap: 10px; }
+  .file {
+    display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start;
+    padding: 12px 14px; border-radius: 12px; background: var(--box); border: 1px solid var(--line);
+  }
+  .file code { font-weight: 700; color: var(--accent); background: none; padding: 0; }
+  .file span { color: var(--muted); font-size: .9rem; }
+  .file .ico { font-size: 1.2rem; }
+
+  code { font-family: Consolas, "Courier New", monospace; font-size: .9em; background: var(--accent-soft); padding: 1px 6px; border-radius: 6px; }
+
+  .shield { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  .shield div { border-radius: 14px; padding: 14px 16px; background: var(--ok-soft); color: var(--ok); font-size: .92rem; }
+  .shield div b { display: block; margin-bottom: 4px; }
+
+  footer { text-align: center; color: var(--muted); font-size: .85rem; margin-top: 10px; }
+
+  @media (max-width: 720px) {
+    .hero { padding: 26px 22px; }
+    .hero h1 { font-size: 1.55rem; }
+    section { padding: 18px; }
+    .two { grid-template-columns: 1fr; }
+    .steps li { grid-template-columns: 36px 1fr; }
+    .steps li::before { width: 36px; height: 36px; border-radius: 11px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow">Architecture overview</div>
+    <h1>P1 API Monitor</h1>
+    <p>Watches ServiceNow P1 incidents, alerts the right people in Teams and email, and gives SWAT teams one shared board to coordinate on, from first alert through resolution. Its data is kept in Azure Storage, so nothing is stored on the server.</p>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><b>15 min</b><span>Default check interval</span></div>
+    <div class="stat"><b>3</b><span>States tracked: In Progress, On Hold, Resolved</span></div>
+    <div class="stat"><b>2</b><span>Alert channels: Teams and email</span></div>
+    <div class="stat"><b>0</b><span>Changes written back to ServiceNow</span></div>
+  </div>
+
+  <section>
+    <h2>Why it helps</h2>
+    <p class="kicker">What changes for the people who respond to P1 incidents.</p>
+    <div class="cards">
+      <div class="card"><div class="icon">⚡</div><h3>Faster awareness</h3><p>New, escalated or re-opened incidents reach Teams and email within one check interval. Nobody has to watch the dashboard.</p></div>
+      <div class="card"><div class="icon">🛡️</div><h3>Nothing silently dropped</h3><p>Each check compares against the last known state. An alert that no channel accepts is retried on the next run.</p></div>
+      <div class="card"><div class="icon">🧭</div><h3>One shared view</h3><p>The SWAT board shows In Progress, On Hold and Resolved incidents with filters and counts, so everyone works from the same data.</p></div>
+      <div class="card"><div class="icon">📝</div><h3>Intake after resolution</h3><p>Resolved and on-hold incidents stay on the board, so teams can still complete the intake form, RCA and notes afterwards.</p></div>
+      <div class="card"><div class="icon">🤖</div><h3>Unattended</h3><p>Calls the ServiceNow REST API with an OAuth client credentials token. No browser, no Okta login, no MFA prompts.</p></div>
+      <div class="card"><div class="icon">📦</div><h3>Portable</h3><p>Runs as one Docker container configured by a single <code>.env</code> file. The data is in Azure Storage, so the container can be moved or rebuilt without losing it.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>System overview</h2>
+    <p class="kicker">Data flows left to right. Alerts go out, and the board reads and writes the same saved state.</p>
+    <div class="diagram">
+      <svg viewBox="0 0 960 470" role="img" aria-label="ServiceNow feeds the monitor container, which alerts Teams and email. SWAT teams use the board on port 8080.">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--arrow)"/>
+          </marker>
+          <linearGradient id="mon" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="var(--accent)" stop-opacity=".18"/>
+            <stop offset="1" stop-color="var(--accent-2)" stop-opacity=".18"/>
+          </linearGradient>
+        </defs>
+
+        <!-- ServiceNow -->
+        <rect x="24" y="150" width="200" height="140" rx="16" fill="var(--box)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="124" y="182" text-anchor="middle" class="title">ServiceNow</text>
+        <text x="124" y="204" text-anchor="middle" class="sub">Incident table</text>
+        <text x="124" y="222" text-anchor="middle" class="sub">REST Table API</text>
+        <text x="124" y="240" text-anchor="middle" class="sub">read-only account</text>
+        <text x="124" y="262" text-anchor="middle" class="sub" style="font-size:11px">states: 2, 3, 6</text>
+
+        <!-- Monitor container -->
+        <rect x="300" y="108" width="300" height="252" rx="16" fill="url(#mon)" stroke="var(--accent)" stroke-width="1.8"/>
+        <text x="450" y="138" text-anchor="middle" class="title" style="fill:var(--accent)">P1 API Monitor</text>
+        <text x="450" y="156" text-anchor="middle" class="sub">Docker container</text>
+        <text x="324" y="186" class="sub">1  Query every 15 min</text>
+        <text x="324" y="208" class="sub">2  Compare with saved incidents</text>
+        <text x="324" y="230" class="sub">3  Detect new, priority, state</text>
+        <text x="324" y="252" class="sub">4  Send alerts, retry failures</text>
+        <text x="324" y="274" class="sub">5  Save state, remove closed</text>
+        <rect x="324" y="292" width="252" height="50" rx="10" fill="var(--box)" stroke="var(--line)"/>
+        <text x="450" y="312" text-anchor="middle" class="sub" style="font-size:11.5px">Azure Storage folder</text>
+        <text x="450" y="330" text-anchor="middle" class="sub" style="font-size:11px">incidents · swat status · notes</text>
+
+        <!-- Teams -->
+        <rect x="672" y="46" width="264" height="104" rx="16" fill="var(--box)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="804" y="78" text-anchor="middle" class="title">Microsoft Teams</text>
+        <text x="804" y="100" text-anchor="middle" class="sub">Power Automate webhook</text>
+        <text x="804" y="118" text-anchor="middle" class="sub">Adaptive card, colour by priority</text>
+        <text x="804" y="136" text-anchor="middle" class="sub" style="font-size:11px">Open in ServiceNow · Open SWAT board</text>
+
+        <!-- Email -->
+        <rect x="672" y="186" width="264" height="92" rx="16" fill="var(--box)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="804" y="216" text-anchor="middle" class="title">Email (SMTP)</text>
+        <text x="804" y="238" text-anchor="middle" class="sub">Team or distribution list</text>
+        <text x="804" y="256" text-anchor="middle" class="sub">P1 sent as high importance</text>
+
+        <!-- SWAT board -->
+        <rect x="672" y="312" width="264" height="122" rx="16" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="1.8"/>
+        <text x="804" y="342" text-anchor="middle" class="title" style="fill:var(--ok)">SWAT board :8080</text>
+        <text x="804" y="364" text-anchor="middle" class="sub">Filter: All · In Progress · On Hold · Resolved</text>
+        <text x="804" y="382" text-anchor="middle" class="sub">Required / Not required, who joined</text>
+        <text x="804" y="400" text-anchor="middle" class="sub">Intake form, notes, Excel export</text>
+
+        <!-- SWAT teams -->
+        <rect x="24" y="330" width="200" height="82" rx="16" fill="var(--box)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="124" y="362" text-anchor="middle" class="title">SWAT teams</text>
+        <text x="124" y="384" text-anchor="middle" class="sub">Infra · Container · Network</text>
+        <text x="124" y="400" text-anchor="middle" class="sub" style="font-size:11px">use the board in a browser</text>
+
+        <!-- Arrows -->
+        <path d="M224,220 L300,220" stroke="var(--arrow)" stroke-width="2.2" fill="none" marker-end="url(#arr)"/>
+        <text x="262" y="212" text-anchor="middle" class="lbl">REST GET</text>
+
+        <path d="M600,190 C630,170 640,110 672,98" stroke="var(--arrow)" stroke-width="2.2" fill="none" marker-end="url(#arr)"/>
+        <text x="640" y="134" text-anchor="middle" class="lbl">alert</text>
+
+        <path d="M600,232 L672,232" stroke="var(--arrow)" stroke-width="2.2" fill="none" marker-end="url(#arr)"/>
+        <text x="636" y="224" text-anchor="middle" class="lbl">alert</text>
+
+        <path d="M672,362 C640,362 620,350 600,330" stroke="var(--ok)" stroke-width="2.2" fill="none" marker-end="url(#arr)"/>
+        <text x="640" y="342" text-anchor="middle" class="lbl" style="fill:var(--ok)">reads / saves</text>
+
+        <path d="M124,330 C124,300 124,280 124,292" stroke="var(--arrow)" stroke-width="0" fill="none"/>
+        <path d="M224,372 C420,430 560,430 672,392" stroke="var(--arrow)" stroke-width="2" fill="none" stroke-dasharray="6 5" marker-end="url(#arr)"/>
+        <text x="440" y="436" text-anchor="middle" class="lbl">browser on the network, port 8080</text>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i></i>Data and alerts</span>
+      <span><i class="dash"></i>People using the board</span>
+      <span>Green path: board reads and writes the saved state</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>What happens every check</h2>
+    <p class="kicker">Each run is the same five steps, so the results are predictable.</p>
+    <ol class="steps">
+      <li><div><b>Query ServiceNow</b><span>Read every incident in In Progress, On Hold and Resolved through the Table API, page by page.</span></div></li>
+      <li><div><b>Compare with the saved list</b><span>Find incidents that are new, changed priority, or moved to On Hold or Resolved since the last run.</span></div></li>
+      <li><div><b>Alert the channels</b><span>Send a Teams card and an email for each change. An alert counts as delivered when at least one channel accepts it.</span></div></li>
+      <li><div><b>Save the outcome</b><span>Store the new state with a timestamp. Keep On Hold and Resolved incidents. Remove the ones that were closed or canceled.</span></div></li>
+      <li><div><b>Retry what failed</b><span>An alert that no channel accepted is not recorded, so the next run sends it again.</span></div></li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Incident lifecycle</h2>
+    <p class="kicker">How one incident moves through the monitor and onto the board.</p>
+    <div class="flow">
+      <div class="state s-new"><div class="dot"></div><h3>In Progress</h3><p>New alert sent. Shown under In Progress.</p></div>
+      <div class="state s-hold"><div class="dot"></div><h3>On Hold</h3><p>Update alert sent. Kept on the board with the time it changed.</p></div>
+      <div class="state s-res"><div class="dot"></div><h3>Resolved</h3><p>Update alert sent. Kept for intake forms and RCA.</p></div>
+      <div class="state s-new"><div class="dot"></div><h3>Reopened</h3><p>Back to In Progress. Alerted again as new.</p></div>
+      <div class="state s-gone"><div class="dot"></div><h3>Closed or canceled</h3><p>Removed from the saved list and the board.</p></div>
+    </div>
+    <div class="note-strip">Priority changes while In Progress trigger a separate alert, so a P2 escalated to P1 is visible immediately.</div>
+  </section>
+
+  <section>
+    <h2>Who it helps</h2>
+    <p class="kicker">The same data serves each role differently.</p>
+    <div class="cards">
+      <div class="card"><div class="icon">📟</div><h3>On-call responders</h3><p>Get the Teams card the moment an incident is raised or changes, with a link straight to ServiceNow.</p></div>
+      <div class="card"><div class="icon">🧑‍✈️</div><h3>SWAT leads</h3><p>Mark each team Required or Not required, record who joined, and spot on-hold or resolved incidents that still need follow-up.</p></div>
+      <div class="card"><div class="icon">🗂️</div><h3>SWAT engineers</h3><p>Complete the intake form and notes, export to Excel, and keep the RCA and timeline together.</p></div>
+      <div class="card"><div class="icon">📈</div><h3>Managers and owners</h3><p>Get email on high-priority changes and one board that shows the current P1 load by state.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where the data lives</h2>
+    <p class="kicker">Three kinds of data in one Azure Storage folder hold everything the monitor and board need.</p>
+    <div class="pill-list">
+      <div class="file"><div class="ico">🗃️</div><div><code>incidents.json</code><br><span>Tracked incidents with last-known state, priority, and when the state last changed.</span></div></div>
+      <div class="file"><div class="ico">✅</div><div><code>swat_status.json</code><br><span>Which teams are Required, who joined each team, and who recorded it and when.</span></div></div>
+      <div class="file"><div class="ico">📝</div><div><code>swat_details/</code><br><span>One file per incident with intake answers, RCA, timestamped notes and version history.</span></div></div>
+    </div>
+    <p class="kicker" style="margin:14px 0 0">Each one is a blob in the container and folder set in <code>.env</code> (<code>AZURE_STORAGE_CONTAINER</code> and <code>AZURE_STORAGE_FOLDER</code>). Give the connection string and the container and folders are created automatically on first start, so an empty storage account is enough. Everyone who uses the board reads the same data, and the container keeps nothing locally.</p>
+  </section>
+
+  <section>
+    <h2>Security boundaries</h2>
+    <p class="kicker">What the tool can and cannot do.</p>
+    <div class="shield">
+      <div><b>Read-only to ServiceNow</b>The monitor only reads incidents. It never changes them. Login is OAuth only, with no user password.</div>
+      <div><b>Secrets stay out of files</b>The OAuth client secret, the storage connection string, webhook URLs and SMTP passwords are environment variables only.</div>
+      <div><b>Least privilege</b>Non-root container. Needs outbound HTTPS and SMTP only.</div>
+      <div><b>Limit the board</b>No login on port 8080. Restrict it to the network or put it behind an authenticated proxy.</div>
+    </div>
+  </section>
+
+  <footer>P1 API Monitor · architecture overview</footer>
+</div>
+</body>
+</html>

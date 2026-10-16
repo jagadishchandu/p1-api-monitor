@@ -1,0 +1,19 @@
+services:
+  p1-api-monitor:
+    build:
+      context: .
+      args:
+        # Built into the image. Taken from SWAT_BOARD_PUBLIC_URL in .env when set, otherwise the default below.
+        SWAT_BOARD_PUBLIC_URL: ${SWAT_BOARD_PUBLIC_URL:-http://localhost:8080}
+    image: p1-api-monitor:latest
+    container_name: p1-api-monitor
+    # All settings (ServiceNow login, Teams webhook, SMTP, interval) come from .env.
+    # The image itself contains no secrets, so the build does not need .env.
+    env_file:
+      - .env
+    ports:
+      # Host port 8080 -> SWAT board inside the container (port 8080).
+      - "8080:8080"
+    # incidents.json, swat_status.json and swat_details/ are stored in Azure Storage
+    # (AZURE_STORAGE_CONNECTION_STRING in .env), so no volume is needed.
+    restart: unless-stopped
