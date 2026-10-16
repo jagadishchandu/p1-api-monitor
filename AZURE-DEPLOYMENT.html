@@ -170,10 +170,11 @@
     <table>
       <tr><th>Resource</th><th>Name</th><th>Purpose</th><th class="num">Per month</th></tr>
       <tr><td>Resource group</td><td><code>rg-p1-api-monitor</code></td><td>Holds everything, so one delete removes all of it</td><td class="num">$0.00</td></tr>
-      <tr><td>Container registry (Basic)</td><td><code>acrp1apimon&lt;suffix&gt;</code></td><td>Stores the image. Admin user on</td><td class="num">$5.07</td></tr>
-      <tr><td>Storage account (Standard LRS)</td><td><code>stp1apimon&lt;suffix&gt;</code></td><td>Blob container with the data files. Created only if no account is in <code>.env</code></td><td class="num">$0.02</td></tr>
+      <tr><td>Container registry (Basic)</td><td><code>acrp1apimon&lt;suffix&gt;</code></td><td>Stores the image. Admin user on. The script removes older image tags, so only the newest image and <code>latest</code> are kept</td><td class="num">$5.07</td></tr>
+      <tr><td>Storage account (Standard LRS)</td><td><code>stp1apimon&lt;suffix&gt;</code></td><td>Blob container with the data files. Standard LRS, TLS 1.2 minimum, public blob access off. Created only if no account is in <code>.env</code></td><td class="num">$0.02</td></tr>
       <tr><td>Blob container</td><td><code>p1-api-monitor</code></td><td>Holds <code>incidents.json</code>, <code>swat_status.json</code> and <code>swat_details/</code></td><td class="num">in the line above</td></tr>
       <tr><td>Container Apps environment</td><td><code>cae-p1-api-monitor</code></td><td>Consumption environment. No log destination, so no workspace</td><td class="num">$0.00</td></tr>
+      <tr><td>Provider registrations</td><td>Microsoft.App, Microsoft.ContainerRegistry, Microsoft.Storage</td><td>Required once per subscription</td><td class="num">$0.00</td></tr>
       <tr><td>Container App</td><td><code>p1-api-monitor</code></td><td>The monitor and SWAT board. 0.25 vCPU, 0.5 GiB, exactly 1 replica (minimum and maximum)</td><td class="num">$4.45 (up to $14.31)</td></tr>
       <tr><td>Log Analytics workspace</td><td>none</td><td>Not created, to save cost</td><td class="num">$0.00</td></tr>
       <tr class="total"><td colspan="3">Total, expected</td><td class="num">$9.53 (range $9.38 to $19.40)</td></tr>
@@ -187,7 +188,7 @@
       <li><div><b>Install the requirements</b><span>Azure PowerShell (<code>Install-Module Az -Scope CurrentUser</code>) and Docker Desktop, running.</span></div></li>
       <li><div><b>Fill in <code>.env</code></b><span>Copy <code>.env.example</code> to <code>.env</code>. Set <code>SN_INSTANCE</code>, <code>SN_CLIENT_ID</code> and <code>SN_CLIENT_SECRET</code>. Leave the storage connection string empty on a first run.</span></div></li>
       <li><div><b>Run the script</b><span><code>powershell -ExecutionPolicy Bypass -File .\deploy-azure.ps1</code>. Sign in with the device code shown.</span></div></li>
-      <li><div><b>Copy the storage connection string</b><span>If the script created a storage account, it writes <code>storage-connection.txt</code>. Copy its <code>AZURE_STORAGE_CONNECTION_STRING</code> line into <code>.env</code>, save, and press Enter.</span></div></li>
+      <li><div><b>Copy the storage connection string</b><span>If the script created a storage account, it writes <code>storage-connection.txt</code>. Copy its <code>AZURE_STORAGE_CONNECTION_STRING</code> line into <code>.env</code>, save, and type <code>YES</code> at the prompt.</span></div></li>
       <li><div><b>Wait for the build and push</b><span>The image is built on your PC and pushed to the registry. The environment takes a few minutes to appear.</span></div></li>
       <li><div><b>Open the SWAT board</b><span>The script prints the <code>https://</code> address. Check the log in the portal under Monitoring &gt; Log stream.</span></div></li>
     </ol>
@@ -236,7 +237,7 @@
     <table>
       <tr><th>Item</th><th>Calculation</th><th class="num">Cost</th></tr>
       <tr><td>Basic registry unit</td><td>$0.1666 per day x 30.42 days</td><td class="num">$5.068</td></tr>
-      <tr><td>Image storage</td><td>0.5 GB, inside the 10 GB included with Basic, so no charge. If the registry grows beyond 10 GB, add $0.10 per GB per month</td><td class="num">$0.000</td></tr>
+      <tr><td>Image storage</td><td>About 0.5 GB for the newest image. The script removes older tags, so it does not grow with each deployment. Inside the 10 GB included with Basic, so no charge. Beyond 10 GB, add $0.10 per GB per month</td><td class="num">$0.000</td></tr>
       <tr class="total"><td colspan="2">Registry, expected</td><td class="num">$5.068</td></tr>
     </table>
 

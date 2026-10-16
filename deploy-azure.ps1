@@ -397,36 +397,51 @@ finally {
 
 # ---------------------------------------------------------------- app settings
 
-# Secrets are stored in Container Apps. Environment variables refer to them with secretRef.
-$secrets = @(
-  @{ name = "acr-password"; value = $registryPassword }
-  @{ name = "client-secret"; value = $settings["SN_CLIENT_SECRET"] }
-  @{ name = "storage-connection-string"; value = $storageConn }
+# Every value from .env is stored as a Container Apps secret. The environment variables refer to the secrets with secretRef,
+# so no setting appears in plain text in the app's configuration.
+$appVariableNames = @(
+  "SN_INSTANCE", "SN_CLIENT_ID", "SN_CLIENT_SECRET", "AZURE_STORAGE_CONNECTION_STRING",
+  "AZURE_STORAGE_CONTAINER", "AZURE_STORAGE_FOLDER", "SWAT_BOARD_ENABLED", "SWAT_BOARD_PORT",
+  "SWAT_BOARD_PUBLIC_URL", "MONITOR_INTERVAL_MINUTES", "TEAMS_WEBHOOK_URLS", "TEAMS_VERIFY_SSL",
+  "EMAIL_TO", "EMAIL_CC", "EMAIL_BCC", "SMTP_HOST", "SMTP_PORT", "SMTP_STARTTLS", "SMTP_USER",
+  "SMTP_PASSWORD", "SMTP_FROM"
 )
-$envVars = @(
-  @{ name = "SN_INSTANCE"; value = $settings["SN_INSTANCE"] }
-  @{ name = "SN_CLIENT_ID"; value = $settings["SN_CLIENT_ID"] }
-  @{ name = "SN_CLIENT_SECRET"; secretRef = "client-secret" }
-  @{ name = "AZURE_STORAGE_CONNECTION_STRING"; secretRef = "storage-connection-string" }
-  @{ name = "AZURE_STORAGE_CONTAINER"; value = $StorageContainer }
-  @{ name = "AZURE_STORAGE_FOLDER"; value = $StorageFolder }
-  @{ name = "SWAT_BOARD_PORT"; value = "8080" }
-)
-foreach ($key in @("MONITOR_INTERVAL_MINUTES", "TEAMS_VERIFY_SSL", "EMAIL_TO", "EMAIL_CC", "EMAIL_BCC", "SMTP_HOST", "SMTP_PORT", "SMTP_STARTTLS", "SMTP_USER", "SMTP_FROM")) {
-  if ($settings[$key]) { $envVars += @{ name = $key; value = $settings[$key] } }
+
+# Container Apps secret names: lowercase letters, digits and hyphens. Kept to 20 characters.
+function Get-SecretName([string]$Variable) {
+  $name = $Variable.ToLower().Replace("_", "-")
+  if ($name.Length -gt 20) { $name = $name.Substring(0, 20).TrimEnd("-") }
+  return $name
 }
-# Optional secrets: stored as secrets, only when set in .env.
-$optionalSecrets = @{ "TEAMS_WEBHOOK_URLS" = "teams-webhook"; "SMTP_PASSWORD" = "smtp-password" }
-foreach ($key in $optionalSecrets.Keys) {
-  if ($settings[$key]) {
-    $secrets += @{ name = $optionalSecrets[$key]; value = $settings[$key] }
-    $envVars += @{ name = $key; secretRef = $optionalSecrets[$key] }
+
+# Returns the secrets and the environment variables for the app. A setting with an empty value is left out.
+function New-AppSettings([string]$PublicUrl) {
+  $values = @{}
+  foreach ($name in $appVariableNames) { $values[$name] = $settings[$name] }
+  # Values the script sets itself take precedence over .env.
+  $values["AZURE_STORAGE_CONNECTION_STRING"] = $storageConn
+  $values["AZURE_STORAGE_CONTAINER"] = $StorageContainer
+  $values["AZURE_STORAGE_FOLDER"] = $StorageFolder
+  $values["SWAT_BOARD_PORT"] = "8080"
+  if ($PublicUrl) { $values["SWAT_BOARD_PUBLIC_URL"] = $PublicUrl }
+
+  $secretList = @( @{ name = "acr-password"; value = $registryPassword } )
+  $envList = @()
+  $usedNames = @{ "acr-password" = $true }
+  foreach ($name in $appVariableNames) {
+    $value = [string]$values[$name]
+    if (-not $value) { continue }
+    $secretName = Get-SecretName $name
+    if ($usedNames.ContainsKey($secretName)) { throw "Two settings would share the secret name '$secretName'. Rename one of them." }
+    $usedNames[$secretName] = $true
+    $secretList += @{ name = $secretName; value = $value }
+    $envList += @{ name = $name; secretRef = $secretName }
   }
+  return @{ secrets = $secretList; env = $envList }
 }
 
 function New-AppProperties([string]$PublicUrl) {
-  $vars = @($envVars)
-  if ($PublicUrl) { $vars += @{ name = "SWAT_BOARD_PUBLIC_URL"; value = $PublicUrl } }
+  $appSettings = New-AppSettings $PublicUrl
   $ingress = @{ external = $true; targetPort = 8080; transport = "auto"; allowInsecure = $false }
   if ($AllowedIpRange) {
     $ingress["ipSecurityRestrictions"] = @( @{ name = "allowed-network"; ipAddressRange = $AllowedIpRange; action = "Allow" } )
@@ -436,11 +451,11 @@ function New-AppProperties([string]$PublicUrl) {
     configuration = @{
       activeRevisionsMode = "Single"
       ingress = $ingress
-      secrets = $secrets
+      secrets = $appSettings.secrets
       registries = @( @{ server = $loginServer; username = $registryUser; passwordSecretRef = "acr-password" } )
     }
     template = @{
-      containers = @( @{ name = $AppName; image = $image; env = $vars; resources = @{ cpu = 0.25; memory = "0.5Gi" } } )
+      containers = @( @{ name = $AppName; image = $image; env = $appSettings.env; resources = @{ cpu = 0.25; memory = "0.5Gi" } } )
       # Exactly one replica: the monitor must run all the time, and two copies would send duplicate alerts.
       scale = @{ minReplicas = 1; maxReplicas = 1 }
     }

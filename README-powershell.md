@@ -116,8 +116,8 @@ Creates the resource group in `-Location` if it does not exist.
 ### 9. Creates or updates the container app
 - Creates or updates `p1-api-monitor` with **New-AzResource** (an ARM request with `-Force`).
 - Settings: external ingress on port `8080`, single revision mode, **exactly 1 replica** (minimum and maximum), 0.25 vCPU, 0.5 GiB.
-- Secrets (Container Apps secrets): `acr-password`, `client-secret`, `storage-connection-string`, and `teams-webhook` or `smtp-password` only if set in `.env`.
-- Environment variables: `SN_INSTANCE`, `SN_CLIENT_ID`, `SN_CLIENT_SECRET` (secret reference), `AZURE_STORAGE_CONNECTION_STRING` (secret reference), `AZURE_STORAGE_CONTAINER`, `AZURE_STORAGE_FOLDER`, `SWAT_BOARD_PORT=8080`, plus any optional settings set in `.env`.
+- **Secrets:** every value from `.env` is stored as a Container Apps secret, not as a plain environment variable. The registry password is a secret too. Each secret name is the variable name in lowercase with hyphens, shortened to 20 characters (for example `SN_CLIENT_SECRET` becomes `sn-client-secret`, and `AZURE_STORAGE_CONNECTION_STRING` becomes `azure-storage-connec`). Settings with an empty value are left out.
+- Environment variables: each setting from `.env` (and `SWAT_BOARD_PORT=8080`, `AZURE_STORAGE_CONTAINER`, `AZURE_STORAGE_FOLDER`, `SWAT_BOARD_PUBLIC_URL` set by the script) points to its secret with `secretRef`. The values themselves are only in the secrets.
 - With `-AllowedIpRange`, the ingress allows only that range.
 - For a new app, the script reads the public address and updates the app once more with `SWAT_BOARD_PUBLIC_URL=https://<address>`, so the **Open SWAT board** button in Teams uses the public address (no port, HTTPS on 443).
 
