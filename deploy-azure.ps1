@@ -32,7 +32,7 @@ param(
     [ValidatePattern('^([a-z0-9]{3,12})?$')]
     [string]$Suffix = "",
 
-    [string]$ResourceGroup = "rg-p1-api-monitor",
+    [string]$ResourceGroup = "rg-p1-api-monitor-test",
     [string]$Location = "eastus",
     [string]$AppName = "p1-api-monitor",
     [string]$EnvironmentName = "cae-p1-api-monitor",
