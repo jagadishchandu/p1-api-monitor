@@ -9,7 +9,7 @@
     --bg: #eef3fa; --card: #ffffff; --ink: #14233b; --muted: #5b6b82; --line: #e1e8f2;
     --accent: #1e4fb8; --accent-2: #0f9d8a; --accent-soft: #e8efff;
     --ok: #17633a; --ok-soft: #e4f6ec; --warn: #8a5a00; --warn-soft: #fff3dc;
-    --red: #b42318; --red-soft: #fde7e4; --shadow: 0 10px 30px rgba(20, 40, 80, 0.08);
+    --shadow: 0 10px 30px rgba(20, 40, 80, 0.08);
     --box: #ffffff; --arrow: #5b6b82;
   }
   @media (prefers-color-scheme: dark) {
@@ -17,16 +17,14 @@
       --bg: #0b1320; --card: #132033; --ink: #e8eef8; --muted: #9fb0c7; --line: #22334d;
       --accent: #7aa7ff; --accent-2: #46d3bd; --accent-soft: #1a2c4a;
       --ok: #9ee6b8; --ok-soft: #14301f; --warn: #ffd27a; --warn-soft: #34290f;
-      --red: #ffb4ab; --red-soft: #3a1816; --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
-      --box: #1a2a42; --arrow: #9fb0c7;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.35); --box: #1a2a42; --arrow: #9fb0c7;
     }
   }
   :root[data-theme="dark"] {
     --bg: #0b1320; --card: #132033; --ink: #e8eef8; --muted: #9fb0c7; --line: #22334d;
     --accent: #7aa7ff; --accent-2: #46d3bd; --accent-soft: #1a2c4a;
     --ok: #9ee6b8; --ok-soft: #14301f; --warn: #ffd27a; --warn-soft: #34290f;
-    --red: #ffb4ab; --red-soft: #3a1816; --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
-    --box: #1a2a42; --arrow: #9fb0c7;
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.35); --box: #1a2a42; --arrow: #9fb0c7;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Segoe UI", system-ui, Arial, sans-serif; line-height: 1.55; }
@@ -44,8 +42,6 @@
   h3 { margin: 18px 0 6px; font-size: 1rem; }
   .kicker { color: var(--muted); margin: 0 0 16px; font-size: .95rem; }
   code { font-family: Consolas, "Courier New", monospace; font-size: .9em; background: var(--accent-soft); padding: 1px 6px; border-radius: 6px; }
-  pre { background: var(--box); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; overflow-x: auto; font-size: .88rem; }
-  pre code { background: none; padding: 0; }
   table { width: 100%; border-collapse: collapse; font-size: .92rem; margin: 6px 0 10px; }
   th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { color: var(--muted); font-weight: 700; font-size: .85rem; text-transform: uppercase; letter-spacing: .04em; }
@@ -87,14 +83,14 @@
   <header class="hero">
     <div class="eyebrow">Azure deployment and cost</div>
     <h1>P1 API Monitor on Azure Container Apps</h1>
-    <p>How the monitor runs in Azure, which resources the PowerShell script creates, and what they cost each month. This page is separate from <code>ARCHITECTURE.html</code>, which describes the application itself.</p>
+    <p>How the monitor runs in Azure, which resources the PowerShell script creates, and what they cost. This page is separate from <code>ARCHITECTURE.html</code>, which describes the application itself. The full cost calculation is in the last section.</p>
   </header>
 
   <div class="stats">
-    <div class="stat"><b>about $7 - $20</b><span>Estimated cost per month</span></div>
+    <div class="stat"><b>about $9.50</b><span>Expected cost per month</span></div>
+    <div class="stat"><b>$9.38 - $19.40</b><span>Monthly range, idle to busy</span></div>
     <div class="stat"><b>1</b><span>Always-on replica. No scale-to-zero</span></div>
-    <div class="stat"><b>0</b><span>Log Analytics workspaces</span></div>
-    <div class="stat"><b>1 command</b><span>Runs <code>deploy-azure.ps1</code></span></div>
+    <div class="stat"><b>$0</b><span>Log Analytics, not created</span></div>
   </div>
 
   <section>
@@ -119,16 +115,13 @@
           </marker>
         </defs>
 
-        <!-- Resource group frame -->
         <rect x="250" y="20" width="460" height="380" rx="18" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="6 5"/>
         <text x="270" y="44" class="sub" style="fill:var(--accent)">Resource group: rg-p1-api-monitor</text>
 
-        <!-- Users -->
         <rect x="24" y="170" width="180" height="90" rx="16" fill="var(--box)" stroke="var(--line)" stroke-width="1.5"/>
         <text x="114" y="202" text-anchor="middle" class="title">SWAT teams</text>
         <text x="114" y="224" text-anchor="middle" class="sub">browser, HTTPS</text>
 
-        <!-- Container App -->
         <rect x="290" y="110" width="200" height="130" rx="16" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.8"/>
         <text x="390" y="140" text-anchor="middle" class="title" style="fill:var(--accent)">Container App</text>
         <text x="390" y="162" text-anchor="middle" class="sub">p1-api-monitor</text>
@@ -136,27 +129,22 @@
         <text x="390" y="198" text-anchor="middle" class="sub">HTTPS on the app address</text>
         <text x="390" y="220" text-anchor="middle" class="sub" style="font-size:11px">Container Apps environment</text>
 
-        <!-- Registry -->
         <rect x="290" y="290" width="200" height="80" rx="16" fill="var(--box)" stroke="var(--line)" stroke-width="1.5"/>
         <text x="390" y="320" text-anchor="middle" class="title">Container registry</text>
         <text x="390" y="342" text-anchor="middle" class="sub">acrp1apimon&lt;suffix&gt; (Basic)</text>
 
-        <!-- Storage -->
         <rect x="540" y="290" width="150" height="80" rx="16" fill="var(--box)" stroke="var(--line)" stroke-width="1.5"/>
         <text x="615" y="320" text-anchor="middle" class="title">Blob Storage</text>
         <text x="615" y="342" text-anchor="middle" class="sub">data files</text>
 
-        <!-- ServiceNow -->
         <rect x="750" y="60" width="190" height="90" rx="16" fill="var(--box)" stroke="var(--line)" stroke-width="1.5"/>
         <text x="845" y="92" text-anchor="middle" class="title">ServiceNow</text>
         <text x="845" y="114" text-anchor="middle" class="sub">REST Table API, OAuth</text>
 
-        <!-- Teams and email -->
         <rect x="750" y="180" width="190" height="90" rx="16" fill="var(--box)" stroke="var(--line)" stroke-width="1.5"/>
         <text x="845" y="212" text-anchor="middle" class="title">Teams and email</text>
         <text x="845" y="234" text-anchor="middle" class="sub">webhook, SMTP</text>
 
-        <!-- Arrows -->
         <path d="M204,215 L290,215" stroke="var(--arrow)" stroke-width="2" fill="none" marker-end="url(#arr)"/>
         <text x="247" y="208" text-anchor="middle" class="lbl">HTTPS</text>
 
@@ -178,68 +166,18 @@
 
   <section>
     <h2>Resources the script creates</h2>
-    <p class="kicker">Names use the suffix you pass, or a random one if you pass none. Existing resources are reused.</p>
+    <p class="kicker">Names use the suffix you pass, or a random one if you pass none. Existing resources are reused. Costs are per month, from the calculation in the last section.</p>
     <table>
-      <tr><th>Resource</th><th>Name</th><th>Purpose</th><th class="num">Est. per month</th></tr>
-      <tr><td>Resource group</td><td><code>rg-p1-api-monitor</code></td><td>Holds everything, so one delete removes all of it</td><td class="num">$0</td></tr>
-      <tr><td>Container registry (Basic)</td><td><code>acrp1apimon&lt;suffix&gt;</code></td><td>Stores the image. Admin user on</td><td class="num">about $5.10</td></tr>
-      <tr><td>Storage account (Standard LRS)</td><td><code>stp1apimon&lt;suffix&gt;</code></td><td>Blob container with the data files. Created only if no account is in <code>.env</code></td><td class="num">under $1</td></tr>
-      <tr><td>Blob container</td><td><code>p1-api-monitor</code></td><td>Holds <code>incidents.json</code>, <code>swat_status.json</code> and <code>swat_details/</code></td><td class="num">included above</td></tr>
-      <tr><td>Container Apps environment</td><td><code>cae-p1-api-monitor</code></td><td>Consumption environment. No log destination, so no workspace</td><td class="num">$0 fixed</td></tr>
-      <tr><td>Container App</td><td><code>p1-api-monitor</code></td><td>The monitor and SWAT board. 0.25 vCPU, 0.5 GiB, exactly 1 replica (minimum and maximum)</td><td class="num">about $2 - $15</td></tr>
-      <tr><td>Log Analytics workspace</td><td>none</td><td>Not created, to save cost</td><td class="num">$0</td></tr>
-      <tr class="total"><td colspan="3">Total (estimate)</td><td class="num">about $7 - $20</td></tr>
+      <tr><th>Resource</th><th>Name</th><th>Purpose</th><th class="num">Per month</th></tr>
+      <tr><td>Resource group</td><td><code>rg-p1-api-monitor</code></td><td>Holds everything, so one delete removes all of it</td><td class="num">$0.00</td></tr>
+      <tr><td>Container registry (Basic)</td><td><code>acrp1apimon&lt;suffix&gt;</code></td><td>Stores the image. Admin user on</td><td class="num">$5.07</td></tr>
+      <tr><td>Storage account (Standard LRS)</td><td><code>stp1apimon&lt;suffix&gt;</code></td><td>Blob container with the data files. Created only if no account is in <code>.env</code></td><td class="num">$0.02</td></tr>
+      <tr><td>Blob container</td><td><code>p1-api-monitor</code></td><td>Holds <code>incidents.json</code>, <code>swat_status.json</code> and <code>swat_details/</code></td><td class="num">in the line above</td></tr>
+      <tr><td>Container Apps environment</td><td><code>cae-p1-api-monitor</code></td><td>Consumption environment. No log destination, so no workspace</td><td class="num">$0.00</td></tr>
+      <tr><td>Container App</td><td><code>p1-api-monitor</code></td><td>The monitor and SWAT board. 0.25 vCPU, 0.5 GiB, exactly 1 replica (minimum and maximum)</td><td class="num">$4.45 (up to $14.31)</td></tr>
+      <tr><td>Log Analytics workspace</td><td>none</td><td>Not created, to save cost</td><td class="num">$0.00</td></tr>
+      <tr class="total"><td colspan="3">Total, expected</td><td class="num">$9.53 (range $9.38 to $19.40)</td></tr>
     </table>
-  </section>
-
-  <section>
-    <h2>How the cost is worked out</h2>
-    <p class="kicker">Estimates use list prices in US dollars. Confirm them in the Azure Pricing Calculator before you budget.</p>
-
-    <h3>Container App (the largest part)</h3>
-    <table>
-      <tr><th>Step</th><th>Calculation</th><th class="num">Amount</th></tr>
-      <tr><td>Hours in a month</td><td>730 hours x 3,600 seconds</td><td class="num">2,628,000 s</td></tr>
-      <tr><td>vCPU-seconds</td><td>0.25 vCPU x 2,628,000 s</td><td class="num">657,000</td></tr>
-      <tr><td>Free grant (vCPU-seconds)</td><td>per subscription, per month</td><td class="num">- 180,000</td></tr>
-      <tr><td>Billable vCPU-seconds</td><td>657,000 - 180,000</td><td class="num">477,000</td></tr>
-      <tr><td>GiB-seconds</td><td>0.5 GiB x 2,628,000 s</td><td class="num">1,314,000</td></tr>
-      <tr><td>Free grant (GiB-seconds)</td><td>per subscription, per month</td><td class="num">- 360,000</td></tr>
-      <tr><td>Billable GiB-seconds</td><td>1,314,000 - 360,000</td><td class="num">954,000</td></tr>
-    </table>
-    <table>
-      <tr><th>Scenario</th><th>Rate used (per second)</th><th class="num">Compute per month</th></tr>
-      <tr><td>Idle most of the time (the monitor's normal state)</td><td>vCPU $0.000003, memory about $0.00000033</td><td class="num">about $1.75</td></tr>
-      <tr><td>Busy the whole month (worst case, active billing)</td><td>vCPU $0.000024, memory $0.000003</td><td class="num">about $14.30</td></tr>
-    </table>
-    <div class="note warn">The per-second rates are not from Microsoft's own price table. They come from a third-party listing and must be checked. Microsoft's Azure Pricing Calculator gives the exact figure for your region.</div>
-
-    <h3>Other resources</h3>
-    <table>
-      <tr><th>Item</th><th>Basis</th><th class="num">Per month</th></tr>
-      <tr><td>Container registry, Basic</td><td>about $0.167 per day x 30.4 days. Includes 10 GB of storage</td><td class="num">about $5.10</td></tr>
-      <tr><td>Blob storage, Standard LRS</td><td>a few MB of JSON plus a few thousand transactions a day</td><td class="num">under $1</td></tr>
-      <tr><td>Container Apps environment</td><td>Consumption plan, no log destination</td><td class="num">$0 fixed</td></tr>
-      <tr><td>Log Analytics</td><td>not created</td><td class="num">$0</td></tr>
-      <tr><td>Resource group, provider registration</td><td>no charge</td><td class="num">$0</td></tr>
-    </table>
-
-    <h3>Totals</h3>
-    <table>
-      <tr><th>Scenario</th><th class="num">Per month</th><th class="num">Per year</th></tr>
-      <tr><td>Idle (normal)</td><td class="num">about $7</td><td class="num">about $90</td></tr>
-      <tr><td>Busy (worst case)</td><td class="num">about $20</td><td class="num">about $240</td></tr>
-    </table>
-    <p class="kicker">The first 2 million requests each month are free. The monitor sends very few requests, so requests add almost nothing.</p>
-
-    <h3>Where the cost comes from, and how to lower it</h3>
-    <ul>
-      <li><b>Registry:</b> it is the largest fixed item after compute. GitHub Container Registry can host the image at no charge, but the script uses Azure Container Registry. Changing this means editing the script.</li>
-      <li><b>Keep one replica, and do not scale to zero.</b> Scaling to zero would stop the 15-minute checks.</li>
-      <li><b>No Log Analytics.</b> The script creates the environment without a log destination, so there is no workspace to pay for.</li>
-      <li><b>Delete the resource group</b> when you no longer need the monitor. Everything in it stops being billed.</li>
-      <li><b>Free account:</b> a new Azure free account includes about USD 200 of credit for 30 days. Azure for Students includes credit without a card.</li>
-    </ul>
   </section>
 
   <section>
@@ -266,15 +204,89 @@
     </div>
   </section>
 
-  <section>
-    <h2>Sources</h2>
+  <section id="cost">
+    <h2>Full cost calculation</h2>
+    <p class="kicker">Rates are the US East retail prices from the Azure Retail Prices API, in US dollars. Calculated for a 730-hour month (2,628,000 seconds).</p>
+
+    <h3>Assumptions</h3>
+    <table>
+      <tr><th>Item</th><th>Value</th><th>Why</th></tr>
+      <tr><td>Region</td><td>East US</td><td>Prices used are for East US</td></tr>
+      <tr><td>Hours per month</td><td>730 (2,628,000 s)</td><td>Standard month length used by Azure pricing</td></tr>
+      <tr><td>Replica size</td><td>0.25 vCPU, 0.5 GiB, 1 replica</td><td>Set in the script</td></tr>
+      <tr><td>Active time</td><td>about 10 s per 15-minute check, 96 checks a day, about 29,050 s a month</td><td>The monitor is mostly idle between checks</td></tr>
+      <tr><td>Checks per month</td><td>96 x 30.42 = about 2,920</td><td>15-minute interval</td></tr>
+      <tr><td>Requests per month</td><td>about 2,000</td><td>SWAT board page views and API calls, a generous estimate</td></tr>
+      <tr><td>Container registry</td><td>Basic, one image about 0.5 GB</td><td>The image is built from the slim Python image</td></tr>
+    </table>
+
+    <h3>Step 1: Container App compute</h3>
+    <table>
+      <tr><th>Meter</th><th>Usage per month</th><th>Free grant</th><th>Billable</th><th class="num">Rate (USD)</th><th class="num">Cost</th></tr>
+      <tr><td>vCPU active</td><td class="num">7,263 vCPU-s</td><td class="num">-</td><td class="num">7,263</td><td class="num">0.000024 / s</td><td class="num">$0.174</td></tr>
+      <tr><td>vCPU idle</td><td class="num">649,737 vCPU-s</td><td class="num">180,000</td><td class="num">469,737</td><td class="num">0.000003 / s</td><td class="num">$1.409</td></tr>
+      <tr><td>Memory active</td><td class="num">14,525 GiB-s</td><td class="num">-</td><td class="num">14,525</td><td class="num">0.000003 / GiB-s</td><td class="num">$0.044</td></tr>
+      <tr><td>Memory idle</td><td class="num">1,299,475 GiB-s</td><td class="num">360,000</td><td class="num">939,475</td><td class="num">0.000003 / GiB-s</td><td class="num">$2.818</td></tr>
+      <tr><td>Requests</td><td class="num">about 2,000</td><td class="num">2,000,000</td><td class="num">0</td><td class="num">0.40 per 1M</td><td class="num">$0.000</td></tr>
+      <tr class="total"><td colspan="5">Container App, expected</td><td class="num">$4.445</td></tr>
+    </table>
+    <p class="kicker">Usage totals: vCPU 0.25 x 2,628,000 = 657,000 vCPU-s (active 7,263 + idle 649,737). Memory 0.5 x 2,628,000 = 1,314,000 GiB-s (active 14,525 + idle 1,299,475). The free grants (180,000 vCPU-s, 360,000 GiB-s) are taken from the idle meters, because most of the time the replica is idle.</p>
+
+    <h3>Step 2: Container registry (Basic)</h3>
+    <table>
+      <tr><th>Item</th><th>Calculation</th><th class="num">Cost</th></tr>
+      <tr><td>Basic registry unit</td><td>$0.1666 per day x 30.42 days</td><td class="num">$5.068</td></tr>
+      <tr><td>Image storage</td><td>0.5 GB, inside the 10 GB included with Basic, so no charge. If the registry grows beyond 10 GB, add $0.10 per GB per month</td><td class="num">$0.000</td></tr>
+      <tr class="total"><td colspan="2">Registry, expected</td><td class="num">$5.068</td></tr>
+    </table>
+
+    <h3>Step 3: Blob storage (Standard LRS, Hot)</h3>
+    <table>
+      <tr><th>Meter</th><th>Usage per month</th><th>Rate (USD)</th><th class="num">Cost</th></tr>
+      <tr><td>Data stored</td><td class="num">about 0.001 GB</td><td class="num">$0.0208 per GB-month</td><td class="num">$0.000</td></tr>
+      <tr><td>Write operations</td><td class="num">about 2,920 (one per check)</td><td class="num">$0.05 per 10K</td><td class="num">$0.015</td></tr>
+      <tr><td>Read operations</td><td class="num">about 6,000 (checks and board views)</td><td class="num">$0.004 per 10K</td><td class="num">$0.002</td></tr>
+      <tr><td>Other operations (container and list)</td><td class="num">a few hundred</td><td class="num">$0.05 per 10K</td><td class="num">$0.000</td></tr>
+      <tr class="total"><td colspan="3">Storage, expected</td><td class="num">$0.017</td></tr>
+    </table>
+
+    <h3>Step 4: Other items</h3>
+    <table>
+      <tr><th>Item</th><th>Why it is $0</th><th class="num">Cost</th></tr>
+      <tr><td>Container Apps environment (Consumption)</td><td>No fixed hourly charge on the Consumption plan. The environment-management meter in the price list belongs to the Dedicated plan, which this does not use</td><td class="num">$0.00</td></tr>
+      <tr><td>Log Analytics workspace</td><td>Not created. The environment has no log destination</td><td class="num">$0.00</td></tr>
+      <tr><td>Resource group, provider registration</td><td>No charge</td><td class="num">$0.00</td></tr>
+      <tr><td>Outbound data</td><td>About a few MB a day to ServiceNow, Teams and email. Azure includes the first 100 GB of outbound data each month</td><td class="num">$0.00</td></tr>
+    </table>
+
+    <h3>Totals per month</h3>
+    <table>
+      <tr><th>Scenario</th><th>Container App</th><th class="num">Registry</th><th class="num">Storage</th><th class="num">Total per month</th><th class="num">Total per year</th></tr>
+      <tr><td>Idle (replica idle all month)</td><td class="num">$4.293</td><td class="num">$5.068</td><td class="num">$0.017</td><td class="num">$9.38</td><td class="num">$112.5</td></tr>
+      <tr><td><b>Expected (about 10 s per check)</b></td><td class="num">$4.445</td><td class="num">$5.068</td><td class="num">$0.017</td><td class="num"><b>$9.53</b></td><td class="num"><b>$114.4</b></td></tr>
+      <tr><td>Busy (replica active all month, worst case)</td><td class="num">$14.310</td><td class="num">$5.068</td><td class="num">$0.017</td><td class="num">$19.40</td><td class="num">$232.7</td></tr>
+    </table>
+    <p class="kicker">Worst case: vCPU (657,000 - 180,000) x $0.000024 = $11.448, and memory (1,314,000 - 360,000) x $0.000003 = $2.862. Idle: vCPU (657,000 - 180,000) x $0.000003 = $1.431, and memory (1,314,000 - 360,000) x $0.000003 = $2.862.</p>
+
+    <div class="note warn">Prices can change, and the free-grant rules and the active and idle definitions come from Microsoft's documentation. Check the exact figure for your subscription in the <a href="https://azure.microsoft.com/pricing/calculator/">Azure Pricing Calculator</a> before you budget. Taxes, currency conversion and any company discount are not included.</div>
+
+    <h3>Where the money goes, and how to lower it</h3>
     <ul>
-      <li><a href="https://azure.microsoft.com/pricing/details/container-apps/">Azure Container Apps pricing</a> (free grants: 180,000 vCPU-seconds, 360,000 GiB-seconds, 2 million requests per subscription per month)</li>
-      <li><a href="https://azure.microsoft.com/pricing/details/container-registry/">Azure Container Registry pricing</a></li>
-      <li><a href="https://azure.microsoft.com/pricing/calculator/">Azure Pricing Calculator</a> (use this for your region)</li>
-      <li><a href="https://www.trustradius.com/products/azure-container-apps/pricing">TrustRadius listing</a>: source of the per-second rates used above. Not verified against Microsoft's price table</li>
+      <li><b>The registry is about 53% of the bill.</b> GitHub Container Registry can host the image at no charge. The script uses Azure Container Registry, so switching means changing the script.</li>
+      <li><b>Keep one replica, and do not scale to zero.</b> Scaling to zero would stop the 15-minute checks.</li>
+      <li><b>No Log Analytics.</b> The script creates the environment without a log destination, so there is no workspace to pay for.</li>
+      <li><b>Delete the resource group</b> when the monitor is no longer needed. Everything in it stops being billed.</li>
+      <li><b>Free account:</b> a new Azure free account includes about USD 200 of credit for 30 days. Azure for Students includes credit without a card.</li>
     </ul>
-    <p class="kicker">Prices change. Treat every figure on this page as an estimate until you check it in the calculator.</p>
+
+    <h3>Sources</h3>
+    <ul>
+      <li>Azure Retail Prices API, Container Apps, East US: <a href="https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Azure%20Container%20Apps'%20and%20armRegionName%20eq%20'eastus'">Container Apps meters</a></li>
+      <li>Azure Retail Prices API, Container Registry, Basic, East US: <a href="https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Container%20Registry'%20and%20armRegionName%20eq%20'eastus'%20and%20skuName%20eq%20'Basic'">Registry meters</a></li>
+      <li>Azure Retail Prices API, Storage, Hot LRS, East US: <a href="https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Storage'%20and%20armRegionName%20eq%20'eastus'%20and%20skuName%20eq%20'Hot%20LRS'">Storage meters</a></li>
+      <li><a href="https://azure.microsoft.com/pricing/details/container-apps/">Azure Container Apps pricing</a> (free grants: 180,000 vCPU-seconds, 360,000 GiB-seconds and 2 million requests per subscription per month)</li>
+      <li><a href="https://azure.microsoft.com/pricing/calculator/">Azure Pricing Calculator</a></li>
+    </ul>
   </section>
 
   <footer>P1 API Monitor · Azure deployment and cost</footer>
