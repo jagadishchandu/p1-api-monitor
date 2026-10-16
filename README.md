@@ -334,7 +334,7 @@ You should get JSON with an `incidents` list.
 
 ## 10. How it behaves
 
-**Every 15 minutes** (`MONITOR_INTERVAL_MINUTES`), the monitor asks ServiceNow for every incident in the states **In Progress**, **On Hold** and **Resolved**, and compares the result with `incidents.json`.
+**Every 15 minutes** (`MONITOR_INTERVAL_MINUTES`), the monitor asks ServiceNow for every SWAT incident: priority **1 - Critical**, **2 - High** or **3 - Moderate**, assigned to the **TOC** group, in the states **In Progress**, **On Hold** and **Resolved**. Other incidents are never read or alerted, and compares the result with `incidents.json`.
 
 | What happened | What the monitor does |
 |---|---|

@@ -51,6 +51,10 @@ STORAGE_NOTES_FOLDER = "swat_details"
 
 # ServiceNow incident state codes used in the query. The display names come back in the API responses.
 SN_STATE_CODES = {"In Progress": "2", "On Hold": "3", "Resolved": "6"}
+# A SWAT incident is one with priority 1 - Critical, 2 - High or 3 - Moderate, assigned to the TOC group.
+# Both rules are applied by ServiceNow in the query, so other incidents are never read.
+SN_SWAT_PRIORITIES = ("1", "2", "3")
+SN_SWAT_ASSIGNMENT_GROUP = "TOC"
 SN_PAGE_SIZE = 200
 SN_TIMEOUT_SECONDS = 60
 
@@ -188,14 +192,17 @@ def authenticate(config: dict, session: requests.Session, force: bool = False) -
 
 
 def fetch_incidents(config: dict) -> tuple:
-    """Ask ServiceNow for every incident in In Progress, On Hold or Resolved.
+    """Ask ServiceNow for every SWAT incident: priority 1, 2 or 3, assignment group TOC, in In Progress, On Hold or Resolved.
     Returns (in_progress, other_states):
         in_progress  - {INC number: incident data} for incidents In Progress
         other_states - {INC number: 'On Hold' or 'Resolved'}
     Raises ServiceNowError when ServiceNow cannot be read. Nothing is changed in that case."""
     url = f"https://{config['sn_instance']}.service-now.com/api/now/table/incident"
-    query = "^OR".join(f"state={code}" for code in SN_STATE_CODES.values()) + "^ORDERBYnumber"
-    fields = "number,sys_id,priority,state,short_description,sys_created_on"
+    query = (f"stateIN{','.join(SN_STATE_CODES.values())}"
+             f"^priorityIN{','.join(SN_SWAT_PRIORITIES)}"
+             f"^assignment_group.name={SN_SWAT_ASSIGNMENT_GROUP}"
+             "^ORDERBYnumber")
+    fields = "number,sys_id,priority,state,assignment_group,short_description,sys_created_on"
 
     session = requests.Session()
     session.headers["Accept"] = "application/json"
