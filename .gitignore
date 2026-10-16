@@ -1,4 +1,5 @@
 .env
+storage-connection.txt
 __pycache__/
 *.pyc
 swat_details/

@@ -3,12 +3,12 @@
     Creates the Azure resources for the P1 API Monitor and deploys it to Azure Container Apps.
 
 .DESCRIPTION
-    The image is built with your local Docker, pushed to Azure Container Registry, and run in
-    Azure Container Apps (1 replica, port 8080, HTTPS on the Container Apps address).
+    Uses Azure PowerShell (Az modules) for all Azure work. The image is built with your local Docker,
+    pushed to Azure Container Registry, and run in Azure Container Apps (1 replica, port 8080, HTTPS on the app address).
     Settings are read from .env in this folder. Secrets are stored as Container Apps secrets and are never printed.
-    Running the script again updates the existing app with a new image and the current .env values.
+    Running the script again creates a new revision with the new image and the current .env values.
 
-    Requires: Azure CLI (az), Docker Desktop running, and a .env file made from .env.example.
+    Requires: Azure PowerShell (Az module), Docker Desktop running, and a .env file made from .env.example.
 
 .EXAMPLE
     .\deploy-azure.ps1 -Suffix jc01
@@ -19,9 +19,9 @@
 [CmdletBinding()]
 param(
     # Short text, lowercase letters and digits only (3-12 characters). Makes the registry and storage account names unique.
-    [Parameter(Mandatory = $true)]
-    [ValidatePattern('^[a-z0-9]{3,12}$')]
-    [string]$Suffix,
+    # Optional: when empty, the script reuses the registry and storage account already in the resource group.
+    [ValidatePattern('^([a-z0-9]{3,12})?$')]
+    [string]$Suffix = "",
 
     [string]$ResourceGroup = "rg-p1-api-monitor",
     [string]$Location = "eastus",
@@ -32,28 +32,14 @@ param(
     [string]$StorageContainer = "p1-api-monitor",
     [string]$StorageFolder = "p1-api-monitor",
 
-    # Optional. Only this address range can open the SWAT board (recommended, because the board has no login).
+    # Optional. Only this address range can open the app (recommended, because the SWAT board has no login).
     [string]$AllowedIpRange = ""
 )
 
-# Continue (not Stop): the Azure CLI and Docker write progress to stderr, which would stop the script.
-# Every external command is checked with $LASTEXITCODE instead.
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-function Invoke-Az {
-    param([string[]]$AzArgs)
-    & az @AzArgs
-    if ($LASTEXITCODE -ne 0) { throw "Azure CLI failed: az $($AzArgs[0]) $($AzArgs[1])" }
-}
-
-# Runs a read-only az query. Returns the trimmed output, or $null when the command fails (for example when not logged in).
-function Test-Az {
-    param([string[]]$AzArgs)
-    $output = & az @AzArgs 2>$null
-    if ($LASTEXITCODE -ne 0) { return $null }
-    return (($output | Out-String).Trim())
-}
+# ---------------------------------------------------------------- helpers
 
 function Read-EnvFile {
     param([string]$Path)
@@ -65,20 +51,37 @@ function Read-EnvFile {
         $i = $text.IndexOf("=")
         if ($i -lt 1) { continue }
         $key = $text.Substring(0, $i).Trim()
-        $value = $text.Substring($i + 1).Trim().Trim('"').Trim("'")
-        $values[$key] = $value
+        $values[$key] = $text.Substring($i + 1).Trim().Trim('"').Trim("'")
     }
     return $values
 }
 
+# Docker writes progress to stderr. Let it finish, then check the exit code.
+function Invoke-Docker {
+    param([string[]]$DockerArgs)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & docker @DockerArgs
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $previous
+    if ($code -ne 0) { throw "docker $($DockerArgs[0]) failed (exit $code)." }
+}
+
+# Returns the object, or $null when it does not exist. "Not found" is expected here, so it is not shown as an error.
+function Get-IfExists {
+    param([scriptblock]$Get)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
+    try { $result = & $Get } catch { $result = $null }
+    $ErrorActionPreference = $previous
+    return $result
+}
+
 # ---------------------------------------------------------------- checks
 
-Write-Host "== Checking tools" -ForegroundColor Cyan
-if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
-    throw "Azure CLI (az) is not installed. Install it from https://learn.microsoft.com/cli/azure/install-azure-cli"
-}
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    throw "Docker is not installed or not on PATH. Install Docker Desktop."
+Write-Host "== Checking tools and settings" -ForegroundColor Cyan
+if (-not (Get-Module -ListAvailable -Name Az.Accounts)) {
+    throw "Azure PowerShell is not installed. Run: Install-Module Az -Scope CurrentUser"
 }
 docker info | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Docker is not running. Start Docker Desktop and try again." }
@@ -88,66 +91,208 @@ foreach ($key in @("SN_INSTANCE", "SN_CLIENT_ID", "SN_CLIENT_SECRET")) {
     if (-not $settings[$key]) { throw "$key is empty in $EnvFile" }
 }
 
-# ---------------------------------------------------------------- Azure login and setup
+# ---------------------------------------------------------------- Azure sign-in and providers
 
-Write-Host "== Azure login" -ForegroundColor Cyan
-if (-not (Test-Az @("account", "show", "--query", "id", "-o", "tsv"))) {
-    Invoke-Az -AzArgs @("login", "--only-show-errors")
+Write-Host "== Azure sign-in" -ForegroundColor Cyan
+if (-not (Get-AzContext)) {
+    # Device code: prints a code and a URL to open in any browser, so no browser window is opened by the script.
+    Connect-AzAccount -UseDeviceAuthentication | Out-Null
 }
 if ($Subscription) {
-    Invoke-Az -AzArgs @("account", "set", "--subscription", $Subscription)
+    Set-AzContext -Subscription $Subscription | Out-Null
+}
+$context = Get-AzContext
+$subscriptionId = $context.Subscription.Id
+Write-Host "Subscription: $($context.Subscription.Name)"
+
+Write-Host "== Resource providers" -ForegroundColor Cyan
+foreach ($namespace in @("Microsoft.App")) {
+    $state = (Get-AzResourceProvider -ProviderNamespace $namespace)[0].RegistrationState
+    if ($state -ne "Registered") {
+        Register-AzResourceProvider -ProviderNamespace $namespace | Out-Null
+        $waited = 0
+        while ($state -ne "Registered" -and $waited -lt 300) {
+            Start-Sleep -Seconds 10
+            $waited += 10
+            $state = (Get-AzResourceProvider -ProviderNamespace $namespace)[0].RegistrationState
+        }
+        if ($state -ne "Registered") { throw "$namespace is not registered yet. Try again in a few minutes." }
+    }
+    Write-Host "${namespace}: Registered"
 }
 
-Write-Host "== Preparing Azure CLI extensions and resource providers" -ForegroundColor Cyan
-Invoke-Az -AzArgs @("extension", "add", "--name", "containerapp", "--upgrade", "--only-show-errors")
-Invoke-Az -AzArgs @("provider", "register", "--namespace", "Microsoft.App", "--wait", "--only-show-errors")
-Invoke-Az -AzArgs @("provider", "register", "--namespace", "Microsoft.OperationalInsights", "--wait", "--only-show-errors")
-
 Write-Host "== Resource group $ResourceGroup" -ForegroundColor Cyan
-Invoke-Az -AzArgs @("group", "create", "--name", $ResourceGroup, "--location", $Location, "--only-show-errors") | Out-Null
+$resourceGroupObject = Get-IfExists { Get-AzResourceGroup -Name $ResourceGroup -ErrorAction SilentlyContinue }
+if ($resourceGroupObject) {
+    Write-Host "Found existing resource group. Reusing it."
+}
+else {
+    New-AzResourceGroup -Name $ResourceGroup -Location $Location | Out-Null
+    Write-Host "Created resource group."
+}
+
+# ---------------------------------------------------------------- find existing resources
+
+# Without -Suffix, reuse the registry and storage account already in the resource group.
+if (-not $Suffix) {
+    $names = @()
+    if ($resourceGroupObject) {
+        $names += @(Get-AzStorageAccount -ResourceGroupName $ResourceGroup -ErrorAction SilentlyContinue |
+            Where-Object { $_.StorageAccountName -like "stp1apimon*" } |
+            ForEach-Object { $_.StorageAccountName.Substring(10) })
+        $names += @(Get-AzContainerRegistry -ResourceGroupName $ResourceGroup -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "acrp1apimon*" } |
+            ForEach-Object { $_.Name.Substring(11) })
+    }
+    $suffixes = @($names | Select-Object -Unique)
+    if ($suffixes.Count -eq 1) {
+        $Suffix = $suffixes[0]
+        Write-Host "Found existing resources with suffix '$Suffix'. Reusing them." -ForegroundColor Green
+    }
+    elseif ($suffixes.Count -gt 1) {
+        throw "More than one set of resources was found in $ResourceGroup ($($suffixes -join ', ')). Run the script again with -Suffix to choose one."
+    }
+    else {
+        # Nothing exists yet: create new resources with a random suffix. A later run without -Suffix finds them again.
+        $Suffix = -join ((@(48..57) + @(97..122)) | Get-Random -Count 6 | ForEach-Object { [char]$_ })
+        Write-Host "No existing resources found. Creating new ones with suffix '$Suffix'." -ForegroundColor Green
+    }
+}
 
 # ---------------------------------------------------------------- storage
 
 $storageName = "stp1apimon$Suffix"
 $acrName = "acrp1apimon$Suffix"
 
-if ($settings["AZURE_STORAGE_CONNECTION_STRING"]) {
-    Write-Host "== Storage: using AZURE_STORAGE_CONNECTION_STRING from .env" -ForegroundColor Cyan
-    $storageConn = $settings["AZURE_STORAGE_CONNECTION_STRING"]
-}
-else {
-    Write-Host "== Storage account $storageName" -ForegroundColor Cyan
-    $found = Test-Az @("storage", "account", "list", "--resource-group", $ResourceGroup, "--query", "[?name=='$storageName'].name", "-o", "tsv")
-    if (-not $found) {
-        Invoke-Az -AzArgs @("storage", "account", "create", "--name", $storageName, "--resource-group", $ResourceGroup, "--location", $Location, "--sku", "Standard_LRS", "--kind", "StorageV2", "--only-show-errors") | Out-Null
-    }
-    $storageConn = Test-Az @("storage", "account", "show-connection-string", "--name", $storageName, "--resource-group", $ResourceGroup, "--query", "connectionString", "-o", "tsv")
-    if (-not $storageConn) { throw "Could not read the connection string of storage account $storageName." }
-    Write-Host "Connection string read from the storage account (not printed)."
+# The account named in .env is used only if it exists in the resource group. Otherwise it is ignored, and the
+# script uses (or creates) its own account. Each lookup is a single check, with no retries.
+$envConn = $settings["AZURE_STORAGE_CONNECTION_STRING"]
+$envAccount = $null
+if ($envConn -match 'AccountName=([^;]+)') {
+    $envAccountName = $Matches[1]
+    $envAccount = Get-IfExists { Get-AzStorageAccount -ResourceGroupName $ResourceGroup -Name $envAccountName -ErrorAction SilentlyContinue }
 }
 
-Write-Host "== Storage container $StorageContainer (the monitor also creates it on start)" -ForegroundColor Cyan
-Invoke-Az -AzArgs @("storage", "container", "create", "--name", $StorageContainer, "--connection-string", $storageConn, "--only-show-errors") | Out-Null
+$storageCreated = $false
+if ($envAccount) {
+    Write-Host "== Storage: using the account from .env ($($envAccount.StorageAccountName))" -ForegroundColor Cyan
+    $storageName = $envAccount.StorageAccountName
+    $storageConn = $envConn
+}
+else {
+    if ($envConn) {
+        Write-Host "The storage account in .env was not found in $ResourceGroup, so it is ignored." -ForegroundColor Yellow
+    }
+    Write-Host "== Storage account $storageName" -ForegroundColor Cyan
+    $storageAccount = Get-IfExists { Get-AzStorageAccount -ResourceGroupName $ResourceGroup -Name $storageName -ErrorAction SilentlyContinue }
+    if ($storageAccount) {
+        Write-Host "Found existing storage account. Reusing it."
+    }
+    else {
+        New-AzStorageAccount -ResourceGroupName $ResourceGroup -Name $storageName -Location $Location -SkuName Standard_LRS -Kind StorageV2 | Out-Null
+        $storageCreated = $true
+        Write-Host "Created storage account."
+    }
+    $key = (Get-AzStorageAccountKey -ResourceGroupName $ResourceGroup -Name $storageName)[0].Value
+    $storageConn = "DefaultEndpointsProtocol=https;AccountName=$storageName;AccountKey=$key;EndpointSuffix=core.windows.net"
+}
+
+# .env needs the new value when the account was just created, or when .env names an account that is not used.
+$staleEnvString = [bool]$envConn -and -not $envAccount
+
+if ($storageCreated -or $staleEnvString) {
+    # Write the details to their own file, so they can be copied into .env. The file holds the account key:
+    # keep it private. It is listed in .gitignore and .dockerignore.
+    $storageFile = Join-Path $PSScriptRoot "storage-connection.txt"
+    $lines = @(
+        "Azure Storage details created by deploy-azure.ps1",
+        "KEEP THIS FILE PRIVATE. It contains the storage account key.",
+        "",
+        "Resource group:   $ResourceGroup",
+        "Storage account:  $storageName",
+        "Container:        $StorageContainer",
+        "Folder:           $StorageFolder",
+        "",
+        "Copy the next line into .env, replacing the empty AZURE_STORAGE_CONNECTION_STRING= line:",
+        "AZURE_STORAGE_CONNECTION_STRING=$storageConn"
+    )
+    [System.IO.File]::WriteAllText($storageFile, (($lines -join "`r`n") + "`r`n"), [System.Text.UTF8Encoding]::new($false))
+    Write-Host "Storage details written to: $storageFile" -ForegroundColor Green
+
+    Write-Host ""
+    Write-Host "ACTION NEEDED: open .env, set AZURE_STORAGE_CONNECTION_STRING to the value in storage-connection.txt, and save the file." -ForegroundColor Yellow
+    Read-Host "Press Enter when .env is saved" | Out-Null
+
+    $settings = Read-EnvFile $EnvFile
+    if (-not $settings["AZURE_STORAGE_CONNECTION_STRING"]) {
+        throw "AZURE_STORAGE_CONNECTION_STRING is still empty in .env. Fill it in and run the script again."
+    }
+    $storageConn = $settings["AZURE_STORAGE_CONNECTION_STRING"]
+}
+
+# The container is created through the management API, so no data-plane call (and no retry loop) is needed.
+Write-Host "== Storage container $StorageContainer" -ForegroundColor Cyan
+$container = Get-IfExists { Get-AzRmStorageContainer -ResourceGroupName $ResourceGroup -StorageAccountName $storageName -Name $StorageContainer -ErrorAction SilentlyContinue }
+if ($container) {
+    Write-Host "Found existing container. Reusing it."
+}
+else {
+    New-AzRmStorageContainer -ResourceGroupName $ResourceGroup -StorageAccountName $storageName -Name $StorageContainer | Out-Null
+    Write-Host "Created container."
+}
 
 # ---------------------------------------------------------------- container registry
 
 Write-Host "== Container registry $acrName" -ForegroundColor Cyan
-$found = Test-Az @("acr", "list", "--resource-group", $ResourceGroup, "--query", "[?name=='$acrName'].name", "-o", "tsv")
-if (-not $found) {
-    Invoke-Az -AzArgs @("acr", "create", "--name", $acrName, "--resource-group", $ResourceGroup, "--location", $Location, "--sku", "Basic", "--admin-enabled", "true", "--only-show-errors") | Out-Null
+$registry = Get-IfExists { Get-AzContainerRegistry -ResourceGroupName $ResourceGroup -Name $acrName -ErrorAction SilentlyContinue }
+if ($registry) {
+    Write-Host "Found existing registry. Reusing it."
+    if (-not $registry.AdminUserEnabled) {
+        # The admin user is needed to push the image and to pull it into Container Apps.
+        $registry = Update-AzContainerRegistry -ResourceGroupName $ResourceGroup -Name $acrName -EnableAdminUser
+        Write-Host "Turned on the admin user for the existing registry."
+    }
 }
-$loginServer = Test-Az @("acr", "show", "--name", $acrName, "--query", "loginServer", "-o", "tsv")
-$acrPassword = Test-Az @("acr", "credential", "show", "--name", $acrName, "--query", "passwords[0].value", "-o", "tsv")
-if (-not $loginServer -or -not $acrPassword) { throw "Could not read the registry details for $acrName." }
+else {
+    $registry = New-AzContainerRegistry -ResourceGroupName $ResourceGroup -Name $acrName -Location $Location -Sku Basic -EnableAdminUser
+    Write-Host "Created registry."
+}
+$loginServer = $registry.LoginServer
+$registryCreds = Get-AzContainerRegistryCredential -ResourceGroupName $ResourceGroup -RegistryName $acrName
+$acrPassword = $registryCreds.Password
 
-# ---------------------------------------------------------------- Container Apps environment
+# ---------------------------------------------------------------- logs and Container Apps environment
 
-Write-Host "== Container Apps environment $EnvironmentName" -ForegroundColor Cyan
-$found = Test-Az @("containerapp", "env", "list", "--resource-group", $ResourceGroup, "--query", "[?name=='$EnvironmentName'].name", "-o", "tsv")
-if (-not $found) {
+Write-Host "== Container Apps environment $EnvironmentName (no Log Analytics)" -ForegroundColor Cyan
+$managedEnvironment = Get-IfExists { Get-AzContainerAppManagedEnv -ResourceGroupName $ResourceGroup -Name $EnvironmentName -ErrorAction SilentlyContinue }
+if ($managedEnvironment) {
+    Write-Host "Found existing environment. Reusing it."
+}
+else {
     Write-Host "Creating the environment (this takes a few minutes)..."
-    Invoke-Az -AzArgs @("containerapp", "env", "create", "--name", $EnvironmentName, "--resource-group", $ResourceGroup, "--location", $Location, "--only-show-errors") | Out-Null
+    # No log destination is set, so no Log Analytics workspace is created. Logs are still available in the portal (Log stream).
+    New-AzContainerAppManagedEnv -Name $EnvironmentName -ResourceGroupName $ResourceGroup -Location $Location | Out-Null
 }
+# The app can only be created once the environment has finished provisioning, so wait for it here.
+$managedEnvironment = $null
+$deadline = (Get-Date).AddMinutes(20)
+while (-not $managedEnvironment) {
+    $current = Get-IfExists { Get-AzContainerAppManagedEnv -ResourceGroupName $ResourceGroup -Name $EnvironmentName -ErrorAction SilentlyContinue }
+    if ($current -and $current.ProvisioningState -eq "Succeeded") {
+        $managedEnvironment = $current
+    }
+    elseif ($current -and @("Failed", "Canceled") -contains $current.ProvisioningState) {
+        throw "The Container Apps environment $EnvironmentName failed to provision (state: $($current.ProvisioningState)). Delete it in the portal and run the script again."
+    }
+    elseif ((Get-Date) -gt $deadline) {
+        throw "Timed out waiting for the Container Apps environment $EnvironmentName."
+    }
+    else {
+        Start-Sleep -Seconds 20
+    }
+}
+Write-Host "Environment ready (state: $($managedEnvironment.ProvisioningState))."
+$environmentId = "/subscriptions/$subscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.App/managedEnvironments/$EnvironmentName"
 
 # ---------------------------------------------------------------- build locally and push
 
@@ -155,93 +300,139 @@ $tag = Get-Date -Format "yyyyMMddHHmmss"
 $image = "$loginServer/p1-api-monitor"
 
 Write-Host "== Building the image with local Docker (tag $tag)" -ForegroundColor Cyan
-docker build -t "${image}:$tag" -t "${image}:latest" $PSScriptRoot
-if ($LASTEXITCODE -ne 0) { throw "docker build failed." }
+Invoke-Docker -DockerArgs @("build", "-t", "${image}:$tag", "-t", "${image}:latest", $PSScriptRoot)
 
 Write-Host "== Pushing the image to $loginServer" -ForegroundColor Cyan
-$acrPassword | docker login $loginServer --username $acrName --password-stdin
-if ($LASTEXITCODE -ne 0) { throw "docker login to $loginServer failed." }
-docker push "${image}:$tag"
-if ($LASTEXITCODE -ne 0) { throw "docker push failed." }
-docker push "${image}:latest"
-if ($LASTEXITCODE -ne 0) { throw "docker push failed." }
+$previous = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$acrPassword | & docker login $loginServer --username $acrName --password-stdin
+$loginCode = $LASTEXITCODE
+$ErrorActionPreference = $previous
+if ($loginCode -ne 0) { throw "docker login to $loginServer failed." }
+Invoke-Docker -DockerArgs @("push", "${image}:$tag")
+Invoke-Docker -DockerArgs @("push", "${image}:latest")
 
-# ---------------------------------------------------------------- settings for the app
+# ---------------------------------------------------------------- app settings
 
-# Secrets: stored in Container Apps, referenced by name from the environment variables.
-$secrets = @(
-    "acr-password=$acrPassword",
-    "client-secret=$($settings['SN_CLIENT_SECRET'])",
-    "storage-connection-string=$storageConn"
-)
-$envVars = @(
-    "SN_INSTANCE=$($settings['SN_INSTANCE'])",
-    "SN_CLIENT_ID=$($settings['SN_CLIENT_ID'])",
-    "SN_CLIENT_SECRET=secretref:client-secret",
-    "AZURE_STORAGE_CONNECTION_STRING=secretref:storage-connection-string",
-    "AZURE_STORAGE_CONTAINER=$StorageContainer",
-    "AZURE_STORAGE_FOLDER=$StorageFolder",
-    "SWAT_BOARD_PORT=8080"
+# Secrets: stored in Container Apps. The environment variables below refer to them by name.
+$secretDefinitions = @(
+    @{ Name = "acr-password"; Value = $acrPassword },
+    @{ Name = "client-secret"; Value = $settings["SN_CLIENT_SECRET"] },
+    @{ Name = "storage-connection-string"; Value = $storageConn }
 )
 
-# Optional plain settings: passed on only when they are set in .env.
+# Plain environment variables: name and value.
+$plainVars = @(
+    @{ Name = "SN_INSTANCE"; Value = $settings["SN_INSTANCE"] },
+    @{ Name = "SN_CLIENT_ID"; Value = $settings["SN_CLIENT_ID"] },
+    @{ Name = "AZURE_STORAGE_CONTAINER"; Value = $StorageContainer },
+    @{ Name = "AZURE_STORAGE_FOLDER"; Value = $StorageFolder },
+    @{ Name = "SWAT_BOARD_PORT"; Value = "8080" }
+)
 foreach ($key in @("MONITOR_INTERVAL_MINUTES", "TEAMS_VERIFY_SSL", "EMAIL_TO", "EMAIL_CC", "EMAIL_BCC", "SMTP_HOST", "SMTP_PORT", "SMTP_STARTTLS", "SMTP_USER", "SMTP_FROM")) {
-    if ($settings[$key]) { $envVars += "$key=$($settings[$key])" }
+    if ($settings[$key]) { $plainVars += @{ Name = $key; Value = $settings[$key] } }
 }
-# Optional secrets: stored as secrets, never as plain values.
+
+# Optional secrets: only when set in .env.
 $optionalSecrets = @{ "TEAMS_WEBHOOK_URLS" = "teams-webhook"; "SMTP_PASSWORD" = "smtp-password" }
+$secretVars = @()
 foreach ($key in $optionalSecrets.Keys) {
-    $secretName = $optionalSecrets[$key]
     if ($settings[$key]) {
-        $secrets += "$secretName=$($settings[$key])"
-        $envVars += "$key=secretref:$secretName"
+        $secretDefinitions += @{ Name = $optionalSecrets[$key]; Value = $settings[$key] }
+        $secretVars += @{ Name = $key; SecretRef = $optionalSecrets[$key] }
     }
+}
+
+function New-AppDefinition {
+    param([string]$PublicUrl)
+
+    $secretObjects = @()
+    foreach ($s in $secretDefinitions) {
+        $secretObjects += New-AzContainerAppSecretObject -Name $s.Name -Value $s.Value
+    }
+
+    $envObjects = @()
+    foreach ($v in $plainVars) {
+        $envObjects += New-AzContainerAppEnvironmentVarObject -Name $v.Name -Value $v.Value
+    }
+    foreach ($v in $secretVars) {
+        $envObjects += New-AzContainerAppEnvironmentVarObject -Name $v.Name -SecretRef $v.SecretRef
+    }
+    $envObjects += New-AzContainerAppEnvironmentVarObject -Name "SN_CLIENT_SECRET" -SecretRef "client-secret"
+    $envObjects += New-AzContainerAppEnvironmentVarObject -Name "AZURE_STORAGE_CONNECTION_STRING" -SecretRef "storage-connection-string"
+    if ($PublicUrl) {
+        $envObjects += New-AzContainerAppEnvironmentVarObject -Name "SWAT_BOARD_PUBLIC_URL" -Value $PublicUrl
+    }
+
+    $registryObject = New-AzContainerAppRegistryCredentialObject -Server $loginServer -Username $acrName -PasswordSecretRef "acr-password"
+
+    $configParams = @{
+        ActiveRevisionsMode = "Single"
+        IngressExternal     = $true
+        IngressTargetPort   = 8080
+        IngressTransport    = "auto"
+        Secret              = $secretObjects
+        Registry            = @($registryObject)
+    }
+    if ($AllowedIpRange) {
+        $configParams["IngressIPSecurityRestriction"] = @(
+            New-AzContainerAppIPSecurityRestrictionRuleObject -Name "allowed-network" -IPAddressRange $AllowedIpRange -Action Allow
+        )
+    }
+    $configuration = New-AzContainerAppConfigurationObject @configParams
+
+    $container = New-AzContainerAppTemplateObject -Name $AppName -Image "${image}:$tag" -ResourceCpu 0.25 -ResourceMemory "0.5Gi" -Env $envObjects
+
+    return @{ Configuration = $configuration; Container = $container }
 }
 
 # ---------------------------------------------------------------- create or update the app
 
-$existing = Test-Az @("containerapp", "list", "--resource-group", $ResourceGroup, "--query", "[?name=='$AppName'].name", "-o", "tsv")
+$app = Get-IfExists { Get-AzContainerApp -ResourceGroupName $ResourceGroup -Name $AppName -ErrorAction SilentlyContinue }
 
-if ($existing) {
-    Write-Host "== Updating $AppName" -ForegroundColor Cyan
-    Invoke-Az -AzArgs (@("containerapp", "secret", "set", "--name", $AppName, "--resource-group", $ResourceGroup, "--secrets") + $secrets + @("--only-show-errors")) | Out-Null
-    Invoke-Az -AzArgs (@("containerapp", "update", "--name", $AppName, "--resource-group", $ResourceGroup, "--image", "${image}:$tag", "--min-replicas", "1", "--max-replicas", "1", "--set-env-vars") + $envVars + @("--only-show-errors")) | Out-Null
+if ($app) {
+    Write-Host "== Updating $AppName (new revision)" -ForegroundColor Cyan
+    $publicUrl = "https://$($app.LatestRevisionFqdn)"
+    $definition = New-AppDefinition -PublicUrl $publicUrl
+    Update-AzContainerApp -Name $AppName -ResourceGroupName $ResourceGroup `
+        -Configuration $definition.Configuration -TemplateContainer @($definition.Container) `
+        -ScaleMinReplica 1 -ScaleMaxReplica 1 | Out-Null
 }
 else {
     Write-Host "== Creating $AppName" -ForegroundColor Cyan
-    Invoke-Az -AzArgs (@(
-        "containerapp", "create",
-        "--name", $AppName,
-        "--resource-group", $ResourceGroup,
-        "--environment", $EnvironmentName,
-        "--image", "${image}:$tag",
-        "--registry-server", $loginServer,
-        "--registry-username", $acrName,
-        "--registry-password", $acrPassword,
-        "--ingress", "external",
-        "--target-port", "8080",
-        "--transport", "auto",
-        "--min-replicas", "1",
-        "--max-replicas", "1",
-        "--cpu", "0.25",
-        "--memory", "0.5Gi",
-        "--secrets"
-    ) + $secrets + @("--env-vars") + $envVars + @("--only-show-errors")) | Out-Null
+    $definition = New-AppDefinition -PublicUrl ""
+    New-AzContainerApp -Name $AppName -ResourceGroupName $ResourceGroup -Location $Location `
+        -ManagedEnvironmentId $environmentId `
+        -Configuration $definition.Configuration -TemplateContainer @($definition.Container) `
+        -ScaleMinReplica 1 -ScaleMaxReplica 1 | Out-Null
+
+    # The public address exists only after the app is created, so set the SWAT board address now.
+    # The public address can take a short time to appear after the first creation.
+    $publicUrl = ""
+    $deadline = (Get-Date).AddMinutes(3)
+    while (-not $publicUrl) {
+        $created = Get-AzContainerApp -ResourceGroupName $ResourceGroup -Name $AppName
+        if ($created.LatestRevisionFqdn) {
+            $publicUrl = "https://$($created.LatestRevisionFqdn)"
+        }
+        elseif ((Get-Date) -gt $deadline) {
+            throw "The app was created, but its public address is not known yet. Run the script again in a few minutes."
+        }
+        else {
+            Start-Sleep -Seconds 10
+        }
+    }
+    Write-Host "== Setting the SWAT board address to $publicUrl" -ForegroundColor Cyan
+    $definition = New-AppDefinition -PublicUrl $publicUrl
+    Update-AzContainerApp -Name $AppName -ResourceGroupName $ResourceGroup `
+        -Configuration $definition.Configuration -TemplateContainer @($definition.Container) `
+        -ScaleMinReplica 1 -ScaleMaxReplica 1 | Out-Null
 }
 
-# ---------------------------------------------------------------- public address and access
+$app = Get-AzContainerApp -ResourceGroupName $ResourceGroup -Name $AppName
+$fqdn = $app.LatestRevisionFqdn
 
-$fqdn = Test-Az @("containerapp", "show", "--name", $AppName, "--resource-group", $ResourceGroup, "--query", "properties.configuration.ingress.fqdn", "-o", "tsv")
-if (-not $fqdn) { throw "Could not read the public address of $AppName." }
-
-Write-Host "== Setting the SWAT board address to https://$fqdn" -ForegroundColor Cyan
-Invoke-Az -AzArgs @("containerapp", "update", "--name", $AppName, "--resource-group", $ResourceGroup, "--set-env-vars", "SWAT_BOARD_PUBLIC_URL=https://$fqdn", "--only-show-errors") | Out-Null
-
-if ($AllowedIpRange) {
-    Write-Host "== Allowing only $AllowedIpRange to reach the app" -ForegroundColor Cyan
-    Invoke-Az -AzArgs @("containerapp", "ingress", "access-restriction", "set", "--name", $AppName, "--resource-group", $ResourceGroup, "--rule-name", "allowed-network", "--ip-address", $AllowedIpRange, "--action", "Allow", "--only-show-errors") | Out-Null
-}
-else {
+if (-not $AllowedIpRange) {
     Write-Warning "No -AllowedIpRange given. The SWAT board has no login, so anyone with the address can use it. Re-run with -AllowedIpRange to restrict it."
 }
 
@@ -256,10 +447,9 @@ try {
 }
 catch {
     Write-Warning "The app did not answer yet: $($_.Exception.Message)"
-    Write-Warning "Check the logs: az containerapp logs show --name $AppName --resource-group $ResourceGroup --tail 100"
+    Write-Warning "Check the logs: Azure portal > $AppName > Monitoring > Log stream (or Get-AzContainerAppRevision for the status)."
 }
 
 Write-Host ""
 Write-Host "Deployed." -ForegroundColor Green
-Write-Host "SWAT board:  https://$fqdn"
-Write-Host "Logs:        az containerapp logs show --name $AppName --resource-group $ResourceGroup --follow"
+Write-Host "SWAT board: https://$fqdn"

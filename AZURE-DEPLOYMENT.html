@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P1 API Monitor - Azure Container Apps deployment and cost</title>
+<style>
+  :root {
+    --bg: #eef3fa; --card: #ffffff; --ink: #14233b; --muted: #5b6b82; --line: #e1e8f2;
+    --accent: #1e4fb8; --accent-2: #0f9d8a; --accent-soft: #e8efff;
+    --ok: #17633a; --ok-soft: #e4f6ec; --warn: #8a5a00; --warn-soft: #fff3dc;
+    --red: #b42318; --red-soft: #fde7e4; --shadow: 0 10px 30px rgba(20, 40, 80, 0.08);
+    --box: #ffffff; --arrow: #5b6b82;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b1320; --card: #132033; --ink: #e8eef8; --muted: #9fb0c7; --line: #22334d;
+      --accent: #7aa7ff; --accent-2: #46d3bd; --accent-soft: #1a2c4a;
+      --ok: #9ee6b8; --ok-soft: #14301f; --warn: #ffd27a; --warn-soft: #34290f;
+      --red: #ffb4ab; --red-soft: #3a1816; --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+      --box: #1a2a42; --arrow: #9fb0c7;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1320; --card: #132033; --ink: #e8eef8; --muted: #9fb0c7; --line: #22334d;
+    --accent: #7aa7ff; --accent-2: #46d3bd; --accent-soft: #1a2c4a;
+    --ok: #9ee6b8; --ok-soft: #14301f; --warn: #ffd27a; --warn-soft: #34290f;
+    --red: #ffb4ab; --red-soft: #3a1816; --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    --box: #1a2a42; --arrow: #9fb0c7;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Segoe UI", system-ui, Arial, sans-serif; line-height: 1.55; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 18px 64px; }
+  .hero { margin: 18px 0; border-radius: 22px; padding: 34px 32px 30px; color: #fff; background: linear-gradient(135deg, #1e4fb8 0%, #0f9d8a 100%); box-shadow: var(--shadow); }
+  .eyebrow { text-transform: uppercase; letter-spacing: .14em; font-size: .72rem; font-weight: 700; opacity: .85; }
+  .hero h1 { margin: 6px 0 8px; font-size: 2rem; line-height: 1.2; }
+  .hero p { margin: 0; max-width: 680px; opacity: .92; font-size: 1.02rem; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .stat { background: var(--card); border-radius: 16px; padding: 16px 18px; box-shadow: var(--shadow); border: 1px solid var(--line); }
+  .stat b { display: block; font-size: 1.5rem; color: var(--accent); }
+  .stat span { color: var(--muted); font-size: .88rem; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 24px 26px; margin-bottom: 18px; box-shadow: var(--shadow); }
+  h2 { margin: 0 0 4px; font-size: 1.25rem; }
+  h3 { margin: 18px 0 6px; font-size: 1rem; }
+  .kicker { color: var(--muted); margin: 0 0 16px; font-size: .95rem; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: .9em; background: var(--accent-soft); padding: 1px 6px; border-radius: 6px; }
+  pre { background: var(--box); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; overflow-x: auto; font-size: .88rem; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: .92rem; margin: 6px 0 10px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 700; font-size: .85rem; text-transform: uppercase; letter-spacing: .04em; }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  tr.total td { font-weight: 700; border-top: 2px solid var(--line); }
+  .note { border-radius: 12px; padding: 12px 16px; margin: 12px 0; font-size: .92rem; }
+  .note.ok { background: var(--ok-soft); color: var(--ok); }
+  .note.warn { background: var(--warn-soft); color: var(--warn); }
+  .note.info { background: var(--accent-soft); color: var(--accent); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .card { background: var(--box); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }
+  .card h3 { margin: 0 0 4px; font-size: 1rem; }
+  .card p { margin: 0; color: var(--muted); font-size: .92rem; }
+  .steps { list-style: none; margin: 0; padding: 0; counter-reset: s; display: grid; gap: 10px; }
+  .steps li { counter-increment: s; display: grid; grid-template-columns: 44px 1fr; gap: 14px; align-items: start; padding: 12px 14px; border-radius: 14px; background: var(--box); border: 1px solid var(--line); }
+  .steps li::before { content: counter(s); width: 44px; height: 44px; border-radius: 14px; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; font-weight: 800; }
+  .steps b { display: block; }
+  .steps span { color: var(--muted); font-size: .92rem; }
+  .diagram { border-radius: 14px; background: linear-gradient(180deg, var(--accent-soft), transparent 70%); padding: 10px; }
+  svg { width: 100%; height: auto; display: block; }
+  svg text { font-family: "Segoe UI", system-ui, Arial, sans-serif; fill: var(--ink); }
+  svg .sub { fill: var(--muted); font-size: 12.5px; }
+  svg .title { font-size: 15px; font-weight: 700; }
+  svg .lbl { font-size: 11.5px; fill: var(--muted); font-weight: 600; }
+  a { color: var(--accent); }
+  footer { text-align: center; color: var(--muted); font-size: .85rem; margin-top: 10px; }
+  @media (max-width: 720px) {
+    .hero { padding: 26px 22px; }
+    .hero h1 { font-size: 1.55rem; }
+    section { padding: 18px; }
+    table { font-size: .85rem; }
+    th, td { padding: 7px 6px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow">Azure deployment and cost</div>
+    <h1>P1 API Monitor on Azure Container Apps</h1>
+    <p>How the monitor runs in Azure, which resources the PowerShell script creates, and what they cost each month. This page is separate from <code>ARCHITECTURE.html</code>, which describes the application itself.</p>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><b>about $7 - $20</b><span>Estimated cost per month</span></div>
+    <div class="stat"><b>1</b><span>Always-on replica. No scale-to-zero</span></div>
+    <div class="stat"><b>0</b><span>Log Analytics workspaces</span></div>
+    <div class="stat"><b>1 command</b><span>Runs <code>deploy-azure.ps1</code></span></div>
+  </div>
+
+  <section>
+    <h2>Why Container Apps</h2>
+    <p class="kicker">The monitor runs all the time and handles little traffic, so the cost is small and fixed.</p>
+    <div class="cards">
+      <div class="card"><h3>No servers to manage</h3><p>Azure runs the container. No virtual machine to patch, and no Docker host to keep alive.</p></div>
+      <div class="card"><h3>Small fixed cost</h3><p>One 0.25 vCPU, 0.5 GiB replica. The monthly free grant covers part of its compute.</p></div>
+      <div class="card"><h3>Same image as local Docker</h3><p>The image is built on your PC and pushed to Azure, so what runs in Azure is what you tested.</p></div>
+      <div class="card"><h3>Reuses what exists</h3><p>The script reuses any resource already in the resource group, and creates only what is missing.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Azure architecture</h2>
+    <p class="kicker">Everything sits in one resource group. The app talks to ServiceNow, Teams and email over HTTPS. Data is stored in Blob Storage, not on the app.</p>
+    <div class="diagram">
+      <svg viewBox="0 0 960 420" role="img" aria-label="Users reach the Container App over HTTPS. The app reads ServiceNow, posts to Teams and email, and stores data in Blob Storage. Images come from the registry.">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--arrow)"/>
+          </marker>
+        </defs>
+
+        <!-- Resource group frame -->
+        <rect x="250" y="20" width="460" height="380" rx="18" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="6 5"/>
+        <text x="270" y="44" class="sub" style="fill:var(--accent)">Resource group: rg-p1-api-monitor</text>
+
+        <!-- Users -->
+        <rect x="24" y="170" width="180" height="90" rx="16" fill="var(--box)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="114" y="202" text-anchor="middle" class="title">SWAT teams</text>
+        <text x="114" y="224" text-anchor="middle" class="sub">browser, HTTPS</text>
+
+        <!-- Container App -->
+        <rect x="290" y="110" width="200" height="130" rx="16" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.8"/>
+        <text x="390" y="140" text-anchor="middle" class="title" style="fill:var(--accent)">Container App</text>
+        <text x="390" y="162" text-anchor="middle" class="sub">p1-api-monitor</text>
+        <text x="390" y="180" text-anchor="middle" class="sub">1 replica, port 8080</text>
+        <text x="390" y="198" text-anchor="middle" class="sub">HTTPS on the app address</text>
+        <text x="390" y="220" text-anchor="middle" class="sub" style="font-size:11px">Container Apps environment</text>
+
+        <!-- Registry -->
+        <rect x="290" y="290" width="200" height="80" rx="16" fill="var(--box)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="390" y="320" text-anchor="middle" class="title">Container registry</text>
+        <text x="390" y="342" text-anchor="middle" class="sub">acrp1apimon&lt;suffix&gt; (Basic)</text>
+
+        <!-- Storage -->
+        <rect x="540" y="290" width="150" height="80" rx="16" fill="var(--box)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="615" y="320" text-anchor="middle" class="title">Blob Storage</text>
+        <text x="615" y="342" text-anchor="middle" class="sub">data files</text>
+
+        <!-- ServiceNow -->
+        <rect x="750" y="60" width="190" height="90" rx="16" fill="var(--box)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="845" y="92" text-anchor="middle" class="title">ServiceNow</text>
+        <text x="845" y="114" text-anchor="middle" class="sub">REST Table API, OAuth</text>
+
+        <!-- Teams and email -->
+        <rect x="750" y="180" width="190" height="90" rx="16" fill="var(--box)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="845" y="212" text-anchor="middle" class="title">Teams and email</text>
+        <text x="845" y="234" text-anchor="middle" class="sub">webhook, SMTP</text>
+
+        <!-- Arrows -->
+        <path d="M204,215 L290,215" stroke="var(--arrow)" stroke-width="2" fill="none" marker-end="url(#arr)"/>
+        <text x="247" y="208" text-anchor="middle" class="lbl">HTTPS</text>
+
+        <path d="M490,160 L750,105" stroke="var(--arrow)" stroke-width="2" fill="none" marker-end="url(#arr)"/>
+        <text x="620" y="124" text-anchor="middle" class="lbl">REST GET</text>
+
+        <path d="M490,200 L750,225" stroke="var(--arrow)" stroke-width="2" fill="none" marker-end="url(#arr)"/>
+        <text x="620" y="222" text-anchor="middle" class="lbl">alerts</text>
+
+        <path d="M390,290 L390,240" stroke="var(--arrow)" stroke-width="2" fill="none" marker-end="url(#arr)"/>
+        <text x="410" y="270" class="lbl">image pull</text>
+
+        <path d="M490,330 L540,330" stroke="var(--ok)" stroke-width="2" fill="none" marker-end="url(#arr)"/>
+        <text x="515" y="318" text-anchor="middle" class="lbl" style="fill:var(--ok)">reads / saves</text>
+      </svg>
+    </div>
+    <div class="note info">The SWAT board runs inside the same app. The public address is HTTPS on port 443, and the app listens on port 8080 inside the container.</div>
+  </section>
+
+  <section>
+    <h2>Resources the script creates</h2>
+    <p class="kicker">Names use the suffix you pass, or a random one if you pass none. Existing resources are reused.</p>
+    <table>
+      <tr><th>Resource</th><th>Name</th><th>Purpose</th><th class="num">Est. per month</th></tr>
+      <tr><td>Resource group</td><td><code>rg-p1-api-monitor</code></td><td>Holds everything, so one delete removes all of it</td><td class="num">$0</td></tr>
+      <tr><td>Container registry (Basic)</td><td><code>acrp1apimon&lt;suffix&gt;</code></td><td>Stores the image. Admin user on</td><td class="num">about $5.10</td></tr>
+      <tr><td>Storage account (Standard LRS)</td><td><code>stp1apimon&lt;suffix&gt;</code></td><td>Blob container with the data files. Created only if no account is in <code>.env</code></td><td class="num">under $1</td></tr>
+      <tr><td>Blob container</td><td><code>p1-api-monitor</code></td><td>Holds <code>incidents.json</code>, <code>swat_status.json</code> and <code>swat_details/</code></td><td class="num">included above</td></tr>
+      <tr><td>Container Apps environment</td><td><code>cae-p1-api-monitor</code></td><td>Consumption environment. No log destination, so no workspace</td><td class="num">$0 fixed</td></tr>
+      <tr><td>Container App</td><td><code>p1-api-monitor</code></td><td>The monitor and SWAT board. 0.25 vCPU, 0.5 GiB, exactly 1 replica (minimum and maximum)</td><td class="num">about $2 - $15</td></tr>
+      <tr><td>Log Analytics workspace</td><td>none</td><td>Not created, to save cost</td><td class="num">$0</td></tr>
+      <tr class="total"><td colspan="3">Total (estimate)</td><td class="num">about $7 - $20</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>How the cost is worked out</h2>
+    <p class="kicker">Estimates use list prices in US dollars. Confirm them in the Azure Pricing Calculator before you budget.</p>
+
+    <h3>Container App (the largest part)</h3>
+    <table>
+      <tr><th>Step</th><th>Calculation</th><th class="num">Amount</th></tr>
+      <tr><td>Hours in a month</td><td>730 hours x 3,600 seconds</td><td class="num">2,628,000 s</td></tr>
+      <tr><td>vCPU-seconds</td><td>0.25 vCPU x 2,628,000 s</td><td class="num">657,000</td></tr>
+      <tr><td>Free grant (vCPU-seconds)</td><td>per subscription, per month</td><td class="num">- 180,000</td></tr>
+      <tr><td>Billable vCPU-seconds</td><td>657,000 - 180,000</td><td class="num">477,000</td></tr>
+      <tr><td>GiB-seconds</td><td>0.5 GiB x 2,628,000 s</td><td class="num">1,314,000</td></tr>
+      <tr><td>Free grant (GiB-seconds)</td><td>per subscription, per month</td><td class="num">- 360,000</td></tr>
+      <tr><td>Billable GiB-seconds</td><td>1,314,000 - 360,000</td><td class="num">954,000</td></tr>
+    </table>
+    <table>
+      <tr><th>Scenario</th><th>Rate used (per second)</th><th class="num">Compute per month</th></tr>
+      <tr><td>Idle most of the time (the monitor's normal state)</td><td>vCPU $0.000003, memory about $0.00000033</td><td class="num">about $1.75</td></tr>
+      <tr><td>Busy the whole month (worst case, active billing)</td><td>vCPU $0.000024, memory $0.000003</td><td class="num">about $14.30</td></tr>
+    </table>
+    <div class="note warn">The per-second rates are not from Microsoft's own price table. They come from a third-party listing and must be checked. Microsoft's Azure Pricing Calculator gives the exact figure for your region.</div>
+
+    <h3>Other resources</h3>
+    <table>
+      <tr><th>Item</th><th>Basis</th><th class="num">Per month</th></tr>
+      <tr><td>Container registry, Basic</td><td>about $0.167 per day x 30.4 days. Includes 10 GB of storage</td><td class="num">about $5.10</td></tr>
+      <tr><td>Blob storage, Standard LRS</td><td>a few MB of JSON plus a few thousand transactions a day</td><td class="num">under $1</td></tr>
+      <tr><td>Container Apps environment</td><td>Consumption plan, no log destination</td><td class="num">$0 fixed</td></tr>
+      <tr><td>Log Analytics</td><td>not created</td><td class="num">$0</td></tr>
+      <tr><td>Resource group, provider registration</td><td>no charge</td><td class="num">$0</td></tr>
+    </table>
+
+    <h3>Totals</h3>
+    <table>
+      <tr><th>Scenario</th><th class="num">Per month</th><th class="num">Per year</th></tr>
+      <tr><td>Idle (normal)</td><td class="num">about $7</td><td class="num">about $90</td></tr>
+      <tr><td>Busy (worst case)</td><td class="num">about $20</td><td class="num">about $240</td></tr>
+    </table>
+    <p class="kicker">The first 2 million requests each month are free. The monitor sends very few requests, so requests add almost nothing.</p>
+
+    <h3>Where the cost comes from, and how to lower it</h3>
+    <ul>
+      <li><b>Registry:</b> it is the largest fixed item after compute. GitHub Container Registry can host the image at no charge, but the script uses Azure Container Registry. Changing this means editing the script.</li>
+      <li><b>Keep one replica, and do not scale to zero.</b> Scaling to zero would stop the 15-minute checks.</li>
+      <li><b>No Log Analytics.</b> The script creates the environment without a log destination, so there is no workspace to pay for.</li>
+      <li><b>Delete the resource group</b> when you no longer need the monitor. Everything in it stops being billed.</li>
+      <li><b>Free account:</b> a new Azure free account includes about USD 200 of credit for 30 days. Azure for Students includes credit without a card.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Deploy steps</h2>
+    <p class="kicker">Run these from the <code>P1-api-monitor</code> folder. The full details are in <code>README-powershell.md</code>.</p>
+    <ol class="steps">
+      <li><div><b>Install the requirements</b><span>Azure PowerShell (<code>Install-Module Az -Scope CurrentUser</code>) and Docker Desktop, running.</span></div></li>
+      <li><div><b>Fill in <code>.env</code></b><span>Copy <code>.env.example</code> to <code>.env</code>. Set <code>SN_INSTANCE</code>, <code>SN_CLIENT_ID</code> and <code>SN_CLIENT_SECRET</code>. Leave the storage connection string empty on a first run.</span></div></li>
+      <li><div><b>Run the script</b><span><code>powershell -ExecutionPolicy Bypass -File .\deploy-azure.ps1</code>. Sign in with the device code shown.</span></div></li>
+      <li><div><b>Copy the storage connection string</b><span>If the script created a storage account, it writes <code>storage-connection.txt</code>. Copy its <code>AZURE_STORAGE_CONNECTION_STRING</code> line into <code>.env</code>, save, and press Enter.</span></div></li>
+      <li><div><b>Wait for the build and push</b><span>The image is built on your PC and pushed to the registry. The environment takes a few minutes to appear.</span></div></li>
+      <li><div><b>Open the SWAT board</b><span>The script prints the <code>https://</code> address. Check the log in the portal under Monitoring &gt; Log stream.</span></div></li>
+    </ol>
+    <div class="note warn"><b>Security:</b> the SWAT board has no login. Add <code>-AllowedIpRange</code> with your office or VPN range, for example <code>-AllowedIpRange 203.0.113.0/24</code>, so only that network can open it.</div>
+  </section>
+
+  <section>
+    <h2>Security and cost safeguards</h2>
+    <div class="cards">
+      <div class="card"><h3>Secrets</h3><p>The OAuth client secret and the storage connection string are Container Apps secrets, not plain values.</p></div>
+      <div class="card"><h3>Network</h3><p>With <code>-AllowedIpRange</code>, only that address range can reach the app.</p></div>
+      <div class="card"><h3>Registry</h3><p>The admin user is on for simplicity. Turn it off and use a managed identity if your policy requires it.</p></div>
+      <div class="card"><h3>One replica</h3><p>Only one copy runs, so alerts are not sent twice and the data files are not written by two copies.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Sources</h2>
+    <ul>
+      <li><a href="https://azure.microsoft.com/pricing/details/container-apps/">Azure Container Apps pricing</a> (free grants: 180,000 vCPU-seconds, 360,000 GiB-seconds, 2 million requests per subscription per month)</li>
+      <li><a href="https://azure.microsoft.com/pricing/details/container-registry/">Azure Container Registry pricing</a></li>
+      <li><a href="https://azure.microsoft.com/pricing/calculator/">Azure Pricing Calculator</a> (use this for your region)</li>
+      <li><a href="https://www.trustradius.com/products/azure-container-apps/pricing">TrustRadius listing</a>: source of the per-second rates used above. Not verified against Microsoft's price table</li>
+    </ul>
+    <p class="kicker">Prices change. Treat every figure on this page as an estimate until you check it in the calculator.</p>
+  </section>
+
+  <footer>P1 API Monitor · Azure deployment and cost</footer>
+</div>
+</body>
+</html>

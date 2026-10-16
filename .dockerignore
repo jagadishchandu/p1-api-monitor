@@ -1,4 +1,5 @@
 .env
+storage-connection.txt
 .env.*
 !.env.example
 __pycache__/
