@@ -346,6 +346,12 @@ You should get JSON with an `incidents` list.
 
 **Why On Hold and Resolved are kept:** SWAT teams often need an intake form for an incident that is already resolved. Those incidents stay on the board, under the Resolved filter, until ServiceNow no longer reports them in these states (for example, when they are Closed).
 
+**Monthly report and clean-up (1st of each month, UTC).** The monitor counts every alert it sends, per incident, in a monthly log (`monthly/<YYYY-MM>.json`). On the 1st of the month, before anything is cleared, it posts **one Teams card** for the previous month:
+- the incidents, sorted by priority, with each incident's priority, state and how many alerts it had that month (up to 30 rows, to stay within Teams' card size limit)
+- totals: P1 incidents, total alerts, and incidents still On Hold
+
+The clean-up runs only after a webhook accepts the card. It then clears `incidents.json`, the SWAT team choices and joined people, deletes the notes in `swat_details/`, and deletes that month's counts. Because `incidents.json` is cleared, open incidents are alerted again on the next check. That is intended, and it is why the same incident can appear in more than one month's report. If no webhook is configured, or none accepts the card, nothing is cleared and the job is tried again on the next check that day. The report is sent once per month.
+
 **Alerts are retried.** If Teams and email both fail for an alert, that alert is not recorded, so it is tried again on the next check.
 
 **The first run** sends an alert for every In Progress incident it has never seen before. If you upload an existing `incidents.json` to the storage folder (section 6), only new changes are alerted.

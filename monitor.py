@@ -25,7 +25,7 @@ import ssl
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -273,6 +273,13 @@ def priority_number(priority):
     return int(match.group(1)) if match else None
 
 
+def swat_board_address(config: dict) -> str:
+    """The SWAT board address shown on Teams cards: SWAT_BOARD_PUBLIC_URL, else the image's default, else this machine."""
+    return (config.get("swat_board_public_url")
+            or os.environ.get("SWAT_BOARD_DEFAULT_URL", "").strip()
+            or f"http://{private_ip()}:{config.get('swat_board_port', 8080)}")
+
+
 def teams_card(config: dict, inc: dict) -> dict:
     """Adaptive Card for one incident. The card itself is the POST body, which is what the Power Automate flow expects."""
     number = inc.get("number") or "Unknown"
@@ -304,6 +311,8 @@ def teams_card(config: dict, inc: dict) -> dict:
         body.append({"type": "TextBlock", "text": f"Created: {inc['created']}", "wrap": True})
     if snippet and snippet != short_description:
         body.append({"type": "TextBlock", "text": snippet, "wrap": True})
+    board_url = swat_board_address(config)
+    body.append({"type": "TextBlock", "text": f"SWAT board: [{board_url}]({board_url})", "wrap": True, "spacing": "Medium"})
     if container_style:
         body = [{"type": "Container", "style": container_style, "bleed": True, "items": body}]
 
@@ -316,8 +325,7 @@ def teams_card(config: dict, inc: dict) -> dict:
     actions = []
     if inc.get("href"):
         actions.append({"type": "Action.OpenUrl", "title": "Open in ServiceNow", "url": inc["href"]})
-    if SWAT_BOARD_URL:
-        actions.append({"type": "Action.OpenUrl", "title": "Open SWAT board", "url": SWAT_BOARD_URL})
+    actions.append({"type": "Action.OpenUrl", "title": "Open SWAT board", "url": board_url})
     if actions:
         card["actions"] = actions
     return card
@@ -522,6 +530,7 @@ def process_incidents(config: dict, current: dict, other_states: dict) -> None:
             if not ok:
                 {"new": undelivered_new, "priority": undelivered_priority, "state": undelivered_state}[kind].add(n)
         sent = sorted(n for (kind, n), ok in zip(kinds, delivered) if ok)
+        record_alerts([alert for alert, ok in zip(alerts, delivered) if ok])
         if sent:
             print(f"Alert sent for: {', '.join(sent)}")
         failed = sorted({n for _, n in kinds} - set(sent))
@@ -567,6 +576,192 @@ def process_incidents(config: dict, current: dict, other_states: dict) -> None:
     _write_json(STORAGE_INCIDENTS, merged)
 
 
+# ---------------------------------------------------------------------------
+# Monthly report and clean-up (runs once, on the 1st of the month, in UTC)
+# ---------------------------------------------------------------------------
+
+MONTHLY_MAX_ROWS = 30  # 30 rows keeps the Teams card at about 26 KB, under the 28 KB limit
+MONTHLY_LAST_RUN = "monthly/last-run.json"
+
+
+def month_key(moment):
+    return moment.strftime("%Y-%m")
+
+
+def record_alerts(alerts, moment=None):
+    """Count one alert per delivered alert in this month's log, monthly/<YYYY-MM>.json. Never stops the monitor."""
+    if not alerts:
+        return
+    key = month_key(moment or datetime.now(timezone.utc))
+
+    def change(log):
+        incidents = log.setdefault("incidents", {})
+        for alert in alerts:
+            number = alert.get("number")
+            if not number:
+                continue
+            entry = incidents.setdefault(number, {"count": 0})
+            entry["count"] = entry.get("count", 0) + 1
+            entry["priority"] = alert.get("priority") or entry.get("priority") or ""
+            change_to = (alert.get("state_change") or {}).get("to")
+            entry["state"] = change_to or alert.get("state") or entry.get("state") or "In Progress"
+            entry["last_alert"] = _now()
+        log["month"] = key
+        return True, "Recorded."
+
+    try:
+        _update_json(f"monthly/{key}.json", change)
+    except Exception as exc:
+        print(f"WARNING: could not count this alert for the monthly report: {exc}", file=sys.stderr)
+
+
+def monthly_report_card(config: dict, month: str, log: dict) -> dict:
+    """One Adaptive Card for the whole month: each incident, its priority, and how many alerts it had."""
+    rows = []
+    for number, entry in (log.get("incidents") or {}).items():
+        rows.append({
+            "number": number,
+            "priority": entry.get("priority") or "",
+            "count": int(entry.get("count", 0)),
+            "state": entry.get("state") or "In Progress",
+        })
+    rows.sort(key=lambda r: (priority_number(r["priority"]) or 9, -r["count"], r["number"]))
+    shown, hidden = rows[:MONTHLY_MAX_ROWS], rows[MONTHLY_MAX_ROWS:]
+    total_alerts = sum(r["count"] for r in rows)
+    p1 = sum(1 for r in rows if priority_number(r["priority"]) == 1)
+    on_hold = sum(1 for r in rows if r["state"] == "On Hold")
+    label = datetime.strptime(month, "%Y-%m").strftime("%B %Y")
+    colours = {1: "Attention", 2: "Warning", 3: "Accent", 4: "Good"}
+
+    def cell(text, weight="Default", colour=None, align="Left"):
+        block = {"type": "TextBlock", "text": text, "wrap": True, "weight": weight, "size": "Small", "horizontalAlignment": align}
+        if colour:
+            block["color"] = colour
+        return {"type": "Column", "width": "stretch", "items": [block]}
+
+    def figure(caption, value, colour=None):
+        return {"type": "Column", "width": "stretch", "items": [
+            {"type": "TextBlock", "text": caption, "isSubtle": True, "size": "Small"},
+            {"type": "TextBlock", "text": str(value), "weight": "Bolder", "size": "ExtraLarge", "color": colour or "Default"},
+        ]}
+
+    body = [
+        {"type": "Container", "style": "accent", "bleed": True, "items": [
+            {"type": "TextBlock", "text": f"SWAT monthly report: {label}", "weight": "Bolder", "size": "Large", "wrap": True},
+            {"type": "TextBlock", "text": f"{len(rows)} incidents this month. Counts are the alerts sent for each incident in {label}.", "wrap": True, "isSubtle": True},
+        ]},
+        {"type": "ColumnSet", "spacing": "Medium", "columns": [
+            figure("Critical (P1)", p1, "Attention"),
+            figure("Total alerts", total_alerts),
+            figure("On Hold now", on_hold, "Warning"),
+        ]},
+        {"type": "ColumnSet", "separator": True, "spacing": "Medium", "columns": [
+            cell("Incident", "Bolder"), cell("Priority", "Bolder"), cell("This month", "Bolder", align="Right"), cell("State", "Bolder"),
+        ]},
+    ]
+    for r in shown:
+        body.append({"type": "ColumnSet", "separator": True, "columns": [
+            cell(r["number"]),
+            cell(r["priority"] or "No priority", colour=colours.get(priority_number(r["priority"]))),
+            cell(str(r["count"]), align="Right"),
+            cell(r["state"]),
+        ]})
+    if hidden:
+        body.append({"type": "TextBlock", "text": f"{len(hidden)} more incidents are not listed here. See the SWAT board.", "wrap": True, "isSubtle": True, "spacing": "Medium"})
+    if not rows:
+        body.append({"type": "TextBlock", "text": "No alerts were sent this month.", "wrap": True, "isSubtle": True})
+
+    board_url = swat_board_address(config)
+    return {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "body": body,
+        "actions": [{"type": "Action.OpenUrl", "title": "Open SWAT board", "url": board_url}],
+    }
+
+
+def send_card(config: dict, card: dict):
+    """Post one card to every webhook. True if any webhook accepted it, False if none did, None if none is configured."""
+    urls = config["teams_webhook_urls"]
+    if not urls:
+        return None
+    verify = config["teams_verify_ssl"]
+    if not verify:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    accepted = False
+    for idx, url in enumerate(urls, start=1):
+        try:
+            resp = requests.post(url, json=card, timeout=30, verify=verify)
+            if resp.ok:
+                accepted = True
+            else:
+                print(f"WARNING: Teams webhook {idx} rejected the monthly report ({resp.status_code}).", file=sys.stderr)
+        except Exception as exc:
+            print(f"WARNING: could not post the monthly report to webhook {idx}: {exc}", file=sys.stderr)
+    return accepted
+
+
+def monthly_cleanup(report_month: str):
+    """After the report is sent: clear incidents.json, the SWAT choices and joined people, the notes, and this month's counts.
+    The next check treats the open incidents as new, so they are alerted again. That is intended."""
+    try:
+        _write_json(STORAGE_INCIDENTS, {})
+        print("  cleared incidents.json")
+    except Exception as exc:
+        print(f"WARNING: could not clear {STORAGE_INCIDENTS}: {exc}", file=sys.stderr)
+
+    try:
+        _write_json(STORAGE_STATUS, {})
+        print("  cleared SWAT choices and joined people")
+    except Exception as exc:
+        print(f"WARNING: could not clear {STORAGE_STATUS}: {exc}", file=sys.stderr)
+
+    try:
+        folder = STORAGE["folder"]
+        prefix = f"{folder}/{STORAGE_NOTES_FOLDER}/" if folder else f"{STORAGE_NOTES_FOLDER}/"
+        deleted = 0
+        for item in list(STORAGE["container"].list_blobs(name_starts_with=prefix)):
+            STORAGE["container"].delete_blob(item.name)
+            deleted += 1
+        print(f"  deleted {deleted} notes file(s)")
+    except Exception as exc:
+        print(f"WARNING: could not delete the notes: {exc}", file=sys.stderr)
+
+    try:
+        _blob(f"monthly/{report_month}.json").delete_blob()
+        print(f"  deleted the counts for {report_month}")
+    except ResourceNotFoundError:
+        pass
+    except Exception as exc:
+        print(f"WARNING: could not delete the counts for {report_month}: {exc}", file=sys.stderr)
+
+
+def run_monthly_report_if_due(config: dict, moment=None) -> bool:
+    """On the 1st of the month, send last month's report, then clean up. Runs once per month. Returns True when it ran."""
+    now = moment or datetime.now(timezone.utc)
+    if now.day != 1:
+        return False
+    report_month = month_key(now - timedelta(days=1))
+    if _read_json(MONTHLY_LAST_RUN).get("reported") == report_month:
+        return False
+
+    log = _read_json(f"monthly/{report_month}.json")
+    sent = send_card(config, monthly_report_card(config, report_month, log))
+    if sent is None:
+        print("Monthly report not sent: no Teams webhook is configured. Clean-up skipped. It will be tried again on the next check.", file=sys.stderr)
+        return False
+    if not sent:
+        print("Monthly report not accepted by any webhook. Clean-up skipped. It will be tried again on the next check.", file=sys.stderr)
+        return False
+
+    # Mark the month as reported before the clean-up, so a failure during the clean-up never sends the report twice.
+    _write_json(MONTHLY_LAST_RUN, {"reported": report_month, "at": now.strftime("%Y-%m-%d %H:%M:%S")})
+    print(f"Monthly report for {report_month} sent. Starting the clean-up.")
+    monthly_cleanup(report_month)
+    return True
+
+
 def check_once(config: dict) -> None:
     current, other_states = fetch_incidents(config)
     process_incidents(config, current, other_states)
@@ -576,6 +771,10 @@ def watch(config: dict) -> None:
     interval = config["interval_minutes"]
     print(f"Checking ServiceNow every {interval} minute(s). Press Ctrl+C to stop.")
     while True:
+        try:
+            run_monthly_report_if_due(config)
+        except Exception as exc:
+            print(f"WARNING: monthly report failed: {exc}", file=sys.stderr)
         try:
             check_once(config)
         except ServiceNowError as exc:
@@ -611,7 +810,7 @@ def start_swat_board(config: dict) -> None:
     except OSError as exc:
         print(f"ERROR: SWAT board could not start on port {port}: {exc}", file=sys.stderr)
         sys.exit(1)
-    SWAT_BOARD_URL = config["swat_board_public_url"] or f"http://{private_ip()}:{port}"
+    SWAT_BOARD_URL = swat_board_address(config)
     print(f"SWAT board running on port {port}. Teams card link: {SWAT_BOARD_URL}")
 
 
@@ -775,9 +974,13 @@ def set_choice(incident, team, field, value, name):
         team_entry = status.setdefault(incident, {}).setdefault(team, {})
         now = _now()
         if field == "required":
-            if team_entry.get("required"):
-                prev = team_entry["required"]
-                return False, f"Already set to {REQUIRED_VALUES[prev['value']]} by {prev['by']} at {prev['at']}."
+            prev = team_entry.get("required")
+            if prev and prev["value"] == value:
+                return False, f"Already set to {REQUIRED_VALUES[value]}."
+            # A change is allowed in either direction. Each change is kept in the team's history.
+            history = team_entry.setdefault("history", [])
+            history.append({"from": prev["value"] if prev else None, "to": value, "by": name, "at": now})
+            team_entry["history"] = history[-20:]
             team_entry["required"] = {"value": value, "by": name, "at": now}
         else:  # joined
             if team_entry.get("required", {}).get("value") != "required":
@@ -991,56 +1194,176 @@ def incidents_for_page():
 BOARD_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SWAT board</title>
+<title>P1 SWAT Board</title>
 <style>
-  body { font-family: Segoe UI, Arial, sans-serif; background: #f3f6fb; margin: 0; padding: 20px; color: #1b2b44; }
-  h1 { margin: 0 0 4px; font-size: 1.5rem; }
-  .sub { color: #56657a; margin-bottom: 16px; }
-  .bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 18px; }
-  .bar input { padding: 8px 10px; border: 1px solid #c5d2e4; border-radius: 8px; min-width: 220px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
-  .card { background: #fff; border-radius: 14px; box-shadow: 0 4px 14px rgba(20, 40, 80, 0.08); padding: 16px; }
-  .card h2 { font-size: 1.05rem; margin: 0 0 6px; display: flex; justify-content: space-between; gap: 8px; }
-  .pri { font-size: 0.8rem; background: #e7efff; color: #1e4fb8; border-radius: 999px; padding: 2px 10px; }
-  .text { font-size: 0.9rem; color: #4a5a70; margin-bottom: 10px; min-height: 2.4em; }
-  .details { font-size: 0.88rem; margin-bottom: 10px; display: inline-block; }
-  .team { border: 1px solid #e0e7f2; border-radius: 10px; padding: 10px; margin-bottom: 10px; }
-  .team.has-joined { background: #eefaf2; border-color: #bfe6cc; }
-  .team strong { display: block; margin-bottom: 6px; }
-  .row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
-  .row label { cursor: pointer; }
-  .row label.off { color: #4a5a70; }
-  .hint { font-size: 0.8rem; color: #6b7a90; }
-  .joined-list { margin: 6px 0; padding-left: 18px; font-size: 0.88rem; }
-  .joined-list small { color: #6b7a90; }
-  .add { display: flex; gap: 8px; margin-top: 6px; }
-  .add input { flex: 1; padding: 6px 8px; border: 1px solid #c5d2e4; border-radius: 8px; }
-  .add button { padding: 6px 12px; border-radius: 8px; border: 0; background: #1e6fd9; color: #fff; cursor: pointer; }
-  .add button:disabled { background: #a9bedb; cursor: default; }
-  .empty { color: #56657a; padding: 30px 0; }
-  .msg { color: #b42318; min-height: 1.2em; margin-bottom: 10px; }
-  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
-  .filters button { padding: 6px 14px; border-radius: 999px; border: 1px solid #c5d2e4; background: #fff; color: #1b2b44; cursor: pointer; font-size: 0.9rem; }
-  .filters button.active { background: #1e4fb8; border-color: #1e4fb8; color: #fff; }
-  .state { font-size: 0.8rem; border-radius: 999px; padding: 2px 10px; background: #e7efff; color: #1e4fb8; }
-  .state.on-hold { background: #fff4e0; color: #8a5a00; }
-  .state.resolved { background: #e6f6ec; color: #17633a; }
-</style></head>
+  :root {
+    --bg: #eef3fa; --card: #ffffff; --ink: #14233b; --muted: #5b6b82; --line: #e1e8f2;
+    --accent: #1e4fb8; --accent-2: #0f9d8a; --accent-soft: #e8efff;
+    --ok: #17633a; --ok-soft: #e4f6ec; --warn: #8a5a00; --warn-soft: #fff3dc;
+    --red: #b42318; --red-soft: #fde7e4; --orange: #b54708; --orange-soft: #fef0e6;
+    --gray: #475467; --gray-soft: #eef0f3;
+    --shadow: 0 10px 30px rgba(20, 40, 80, 0.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b1320; --card: #132033; --ink: #e8eef8; --muted: #9fb0c7; --line: #22334d;
+      --accent: #7aa7ff; --accent-2: #46d3bd; --accent-soft: #1a2c4a;
+      --ok: #9ee6b8; --ok-soft: #14301f; --warn: #ffd27a; --warn-soft: #34290f;
+      --red: #ffb4ab; --red-soft: #3a1816; --orange: #fdb97d; --orange-soft: #3a2614;
+      --gray: #cdd5e0; --gray-soft: #1d2a3d;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1320; --card: #132033; --ink: #e8eef8; --muted: #9fb0c7; --line: #22334d;
+    --accent: #7aa7ff; --accent-2: #46d3bd; --accent-soft: #1a2c4a;
+    --ok: #9ee6b8; --ok-soft: #14301f; --warn: #ffd27a; --warn-soft: #34290f;
+    --red: #ffb4ab; --red-soft: #3a1816; --orange: #fdb97d; --orange-soft: #3a2614;
+    --gray: #cdd5e0; --gray-soft: #1d2a3d;
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Segoe UI", system-ui, Arial, sans-serif; line-height: 1.5; min-height: 100vh; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 0 18px 48px; }
+
+  /* Header */
+  .hero { margin: 18px 0 16px; border-radius: 22px; padding: 26px 28px; color: #fff; background: linear-gradient(135deg, #1e4fb8 0%, #0f9d8a 100%); box-shadow: var(--shadow); position: relative; overflow: hidden; }
+  .hero::after { content: ""; position: absolute; right: -70px; top: -80px; width: 260px; height: 260px; border-radius: 50%; background: rgba(255, 255, 255, 0.10); }
+  .hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; position: relative; z-index: 1; }
+  .eyebrow { text-transform: uppercase; letter-spacing: .14em; font-size: .72rem; font-weight: 700; opacity: .85; }
+  .hero h1 { margin: 4px 0 4px; font-size: 1.8rem; line-height: 1.15; }
+  .hero p { margin: 0; opacity: .92; max-width: 560px; font-size: .96rem; }
+  .live { display: inline-flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.16); border-radius: 999px; padding: 6px 12px; font-size: .85rem; }
+  .live i { width: 9px; height: 9px; border-radius: 50%; background: #7dffb3; box-shadow: 0 0 0 0 rgba(125, 255, 179, .7); animation: pulse 2s infinite; display: inline-block; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(125, 255, 179, .7); } 70% { box-shadow: 0 0 0 9px rgba(125, 255, 179, 0); } 100% { box-shadow: 0 0 0 0 rgba(125, 255, 179, 0); } }
+  .hero-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 16px; position: relative; z-index: 1; }
+  .hero-bar input { padding: 9px 12px; border: 1px solid rgba(255, 255, 255, 0.45); border-radius: 10px; min-width: 230px; background: rgba(255, 255, 255, 0.95); color: #14233b; font: inherit; }
+  .hero-bar input::placeholder { color: #6b7a90; }
+
+  /* Stat tiles */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; box-shadow: var(--shadow); }
+  .stat b { display: block; font-size: 1.6rem; line-height: 1.1; }
+  .stat span { color: var(--muted); font-size: .86rem; }
+  .stat.s-prog b { color: var(--accent); }
+  .stat.s-hold b { color: var(--warn); }
+  .stat.s-res b { color: var(--ok); }
+  .stat.s-req b { color: var(--accent-2); }
+
+  /* Toolbar */
+  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; }
+  .filters button { padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; font: inherit; font-size: .9rem; transition: transform .12s ease; }
+  .filters button:hover { transform: translateY(-1px); }
+  .filters button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .search { padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; min-width: 240px; background: var(--card); color: var(--ink); font: inherit; }
+  .msg { color: var(--red); min-height: 1.3em; margin: 0 0 10px; font-weight: 600; }
+
+  /* Cards */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-top: 4px solid var(--accent); border-radius: 18px; padding: 18px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px; }
+  .card.on-hold { border-top-color: var(--warn); }
+  .card.resolved { border-top-color: var(--ok); }
+  .card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .inc { font-family: Consolas, "Courier New", monospace; font-size: 1.05rem; font-weight: 700; }
+  .meta { color: var(--muted); font-size: .84rem; margin-top: 2px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .pill { font-size: .78rem; font-weight: 700; border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
+  .state { background: var(--accent-soft); color: var(--accent); }
+  .state.on-hold { background: var(--warn-soft); color: var(--warn); }
+  .state.resolved { background: var(--ok-soft); color: var(--ok); }
+  .p-1 { background: var(--red-soft); color: var(--red); }
+  .p-2 { background: var(--orange-soft); color: var(--orange); }
+  .p-3 { background: var(--warn-soft); color: var(--warn); }
+  .p-4 { background: var(--ok-soft); color: var(--ok); }
+  .p-5, .p-none { background: var(--gray-soft); color: var(--gray); }
+  .desc { margin: 0; color: var(--muted); font-size: .93rem; min-height: 2.8em; }
+  .details { color: var(--accent); font-size: .88rem; font-weight: 600; text-decoration: none; }
+  .details:hover { text-decoration: underline; }
+
+  /* Team sections */
+  .team { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: var(--box, transparent); }
+  .team.has-joined { background: var(--ok-soft); border-color: transparent; }
+  .team-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .team-head strong { font-size: .96rem; }
+  .status { font-size: .76rem; font-weight: 700; border-radius: 999px; padding: 2px 9px; background: var(--gray-soft); color: var(--gray); }
+  .status.req { background: var(--ok-soft); color: var(--ok); }
+  .status.notreq { background: var(--warn-soft); color: var(--warn); }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .seg label { position: relative; text-align: center; padding: 7px 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); cursor: pointer; font-size: .88rem; font-weight: 600; transition: background .12s ease; }
+  .seg label:hover { background: var(--accent-soft); }
+  .seg label.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .seg label.off { opacity: .55; cursor: default; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; }
+  .seg label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .hint { color: var(--muted); font-size: .8rem; margin-top: 8px; }
+  .history { list-style: none; margin: 4px 0 0; padding: 0; color: var(--muted); font-size: .8rem; }
+  .history li { padding: 2px 0; }
+  .joined-title { color: var(--muted); font-size: .8rem; font-weight: 700; margin-top: 10px; text-transform: uppercase; letter-spacing: .05em; }
+  .chip-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
+  .chip-list li { background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: .84rem; }
+  .chip-list small { color: var(--muted); }
+  .add { display: flex; gap: 8px; margin-top: 10px; }
+  .add input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); font: inherit; }
+  .add input:disabled { opacity: .6; }
+  .add button { padding: 7px 14px; border-radius: 10px; border: 0; background: var(--accent); color: #fff; cursor: pointer; font: inherit; font-weight: 600; }
+  .add button:disabled { opacity: .45; cursor: default; }
+  .empty { grid-column: 1 / -1; text-align: center; color: var(--muted); padding: 48px 16px; background: var(--card); border: 1px dashed var(--line); border-radius: 18px; }
+  .empty b { display: block; color: var(--ink); font-size: 1.05rem; margin-bottom: 4px; }
+
+  footer { text-align: center; color: var(--muted); font-size: .8rem; margin-top: 22px; }
+
+  @media (max-width: 720px) {
+    .hero { padding: 20px; }
+    .hero h1 { font-size: 1.45rem; }
+    .grid { grid-template-columns: 1fr; }
+    .search { min-width: 0; width: 100%; }
+    .hero-bar input { min-width: 0; width: 100%; }
+  }
+</style>
+</head>
 <body>
-  <h1>SWAT board</h1>
-  <div class="sub">For each team, choose Required or Not required. Then add the people who joined. Everyone sees the same choices.</div>
-  <div class="bar">
-    <input id="name" placeholder="Your name (required to save)" maxlength="60">
-    <span class="sub" id="updated"></span>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="hero-top">
+      <div>
+        <div class="eyebrow">P1 incidents</div>
+        <h1>SWAT Board</h1>
+        <p>For each team, choose Required or Not required, then add the people who joined. Everyone sees the same choices.</p>
+      </div>
+      <div class="live"><i></i><span id="updated">Connecting...</span></div>
+    </div>
+    <div class="hero-bar">
+      <input id="name" placeholder="Your name (required to save)" maxlength="60" aria-label="Your name">
+    </div>
+  </header>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="toolbar">
+    <div class="filters" id="filters"></div>
+    <input class="search" id="search" type="search" placeholder="Search incident, priority or text" aria-label="Search incidents">
   </div>
-  <div class="filters" id="filters"></div>
-  <div class="msg" id="msg"></div>
+
+  <div class="msg" id="msg" role="status"></div>
   <div class="grid" id="grid"></div>
+
+  <footer>Refreshes every 10 seconds. Changes are saved to the shared store.</footer>
+</div>
+
 <script>
 const TEAMS = [["infra", "Infra Ops"], ["container", "Container Ops"], ["network", "Network Ops"]];
+const STATES = ["In Progress", "On Hold", "Resolved"];
 const nameBox = document.getElementById("name");
+const searchBox = document.getElementById("search");
 nameBox.value = localStorage.getItem("swat-name") || "";
 nameBox.addEventListener("change", () => localStorage.setItem("swat-name", nameBox.value.trim()));
+
+let stateFilter = "All";
+let query = "";
+let lastData = { incidents: [], swat: {} };
+searchBox.addEventListener("input", () => { query = searchBox.value.trim().toLowerCase(); render(lastData); });
 
 function setMsg(text) { document.getElementById("msg").textContent = text || ""; }
 
@@ -1068,39 +1391,70 @@ async function save(incident, team, field, value) {
   return r.ok;
 }
 
+function stateClass(state) {
+  return state === "On Hold" ? "on-hold" : state === "Resolved" ? "resolved" : "";
+}
+
+function choiceLabel(value) {
+  return value === "required" ? "Required" : "Not required";
+}
+
+function priorityClass(priority) {
+  const n = parseInt(String(priority || ""), 10);
+  return isNaN(n) ? "p-none" : "p-" + n;
+}
+
 function teamBlock(incident, key, label, info) {
   const req = info.required || {};
   const joined = info.joined || [];
-  const name = `${incident}-${key}`;
+  const groupName = `${incident}-${key}`;
   const isRequired = req.value === "required";
+  const statusClass = req.value === "required" ? "req" : req.value === "not_required" ? "notreq" : "";
+  const statusText = req.value === "required" ? "Required" : req.value === "not_required" ? "Not required" : "Not chosen";
 
-  const radios = el("div", { class: "row" });
+  const seg = el("div", { class: "seg" });
   for (const [value, text] of Object.entries({ required: "Required", not_required: "Not required" })) {
-    const id = `${name}-${value}`;
-    const radio = el("input", { type: "radio", name: name, id: id });
+    const id = `${groupName}-${value}`;
+    const radio = el("input", { type: "radio", name: groupName, id: id });
     radio.checked = req.value === value;
-    radio.disabled = !!req.value;
     radio.addEventListener("change", () => { if (radio.checked) save(incident, key, "required", value); });
-    radios.appendChild(el("label", { for: id, class: req.value && req.value !== value ? "off" : "" }, [radio, document.createTextNode(" " + text)]));
+    seg.appendChild(el("label", { for: id, class: radio.checked ? "on" : "" }, [radio, document.createTextNode(text)]));
   }
 
-  const block = el("div", { class: "team" + (joined.length ? " has-joined" : "") }, [el("strong", { text: label }), radios]);
-  if (req.value) block.appendChild(el("span", { class: "hint", text: `${req.value === "required" ? "Required" : "Not required"}: chosen by ${req.by} at ${req.at}` }));
-  else block.appendChild(el("span", { class: "hint", text: "Not chosen yet" }));
+  const block = el("div", { class: "team" + (joined.length ? " has-joined" : "") }, [
+    el("div", { class: "team-head" }, [
+      el("strong", { text: label }),
+      el("span", { class: "status " + statusClass, text: statusText }),
+    ]),
+    seg,
+  ]);
+  if (req.value) {
+    block.appendChild(el("div", { class: "hint", text: `Current: ${statusText} by ${req.by} at ${req.at}. Click the other option to change it.` }));
+  }
+  const history = (info.history || []).slice(-3).reverse();
+  if (history.length) {
+    block.appendChild(el("div", { class: "joined-title", text: "Status history" }));
+    const list = el("ul", { class: "history" });
+    for (const h of history) {
+      const from = h.from ? choiceLabel(h.from) : "Not chosen";
+      list.appendChild(el("li", { text: `${from} → ${choiceLabel(h.to)} by ${h.by} at ${h.at}` }));
+    }
+    block.appendChild(list);
+  }
 
-  block.appendChild(el("div", { class: "hint", style: "margin-top:8px", text: "Joined:" }));
+  block.appendChild(el("div", { class: "joined-title", text: "Joined" }));
   if (!joined.length) {
-    block.appendChild(el("div", { class: "hint", text: isRequired ? "No one has joined yet." : "" }));
+    block.appendChild(el("div", { class: "hint", text: isRequired ? "No one has joined yet." : "Mark Required to add people." }));
   } else {
-    const list = el("ul", { class: "joined-list" });
+    const list = el("ul", { class: "chip-list" });
     for (const p of joined) {
-      list.appendChild(el("li", {}, [document.createTextNode(p.name + " "), el("small", { text: `(added by ${p.added_by} at ${p.at})` })]));
+      list.appendChild(el("li", {}, [document.createTextNode(p.name + " "), el("small", { text: `· ${p.added_by}` })]));
     }
     block.appendChild(list);
   }
 
   const addRow = el("div", { class: "add" });
-  const input = el("input", { type: "text", maxlength: "60", placeholder: isRequired ? "Name of person who joined" : "Mark Required first", id: `${name}-who` });
+  const input = el("input", { type: "text", maxlength: "60", placeholder: isRequired ? "Name of person who joined" : "Mark Required first", id: `${groupName}-who`, "aria-label": `${label}: name of person who joined` });
   input.disabled = !isRequired;
   const button = el("button", { type: "button", text: "Add" });
   button.disabled = !isRequired;
@@ -1117,19 +1471,37 @@ function teamBlock(incident, key, label, info) {
   return block;
 }
 
-const STATES = ["In Progress", "On Hold", "Resolved"];
-let stateFilter = "All";
-let lastData = { incidents: [], swat: {} };
-
-function stateClass(state) {
-  return state === "On Hold" ? "on-hold" : state === "Resolved" ? "resolved" : "";
+function matches(inc) {
+  if (stateFilter !== "All" && (inc.state || "In Progress") !== stateFilter) return false;
+  if (!query) return true;
+  const haystack = [inc.number, inc.priority, inc.state, inc.text].join(" ").toLowerCase();
+  return haystack.includes(query);
 }
 
-function renderFilters() {
+function renderStats(data) {
+  const incidents = data.incidents || [];
+  const count = (s) => incidents.filter((i) => (i.state || "In Progress") === s).length;
+  let required = 0;
+  for (const inc of incidents) {
+    const swat = (data.swat && data.swat[inc.number]) || {};
+    for (const [key] of TEAMS) if (swat[key] && swat[key].required && swat[key].required.value === "required") required++;
+  }
+  const tiles = [
+    ["stat", incidents.length, "Incidents"],
+    ["stat s-prog", count("In Progress"), "In Progress"],
+    ["stat s-hold", count("On Hold"), "On Hold"],
+    ["stat s-res", count("Resolved"), "Resolved"],
+    ["stat s-req", required, "Teams marked Required"],
+  ].map(([cls, value, label]) => el("div", { class: cls }, [el("b", { text: String(value) }), el("span", { text: label })]));
+  document.getElementById("stats").replaceChildren(...tiles);
+}
+
+function renderFilters(data) {
   const bar = document.getElementById("filters");
   bar.replaceChildren();
-  const counts = { All: lastData.incidents.length };
-  for (const s of STATES) counts[s] = lastData.incidents.filter((i) => i.state === s).length;
+  const incidents = data.incidents || [];
+  const counts = { All: incidents.length };
+  for (const s of STATES) counts[s] = incidents.filter((i) => (i.state || "In Progress") === s).length;
   for (const s of ["All", ...STATES]) {
     const button = el("button", { type: "button", class: s === stateFilter ? "active" : "", text: `${s} (${counts[s]})` });
     button.addEventListener("click", () => { stateFilter = s; render(lastData); });
@@ -1137,36 +1509,45 @@ function renderFilters() {
   }
 }
 
+function renderCard(inc, swat) {
+  const state = inc.state || "In Progress";
+  const card = el("article", { class: "card " + stateClass(state) }, [
+    el("div", { class: "card-top" }, [
+      el("div", {}, [
+        el("div", { class: "inc", text: inc.number }),
+        el("div", { class: "meta", text: inc.state_at ? "Since " + inc.state_at : "Current state" }),
+      ]),
+      el("div", { class: "chips" }, [
+        el("span", { class: "pill state " + stateClass(state), text: state }),
+        el("span", { class: "pill " + priorityClass(inc.priority), text: inc.priority || "No priority" }),
+      ]),
+    ]),
+    el("p", { class: "desc", text: inc.text || "No description" }),
+    el("a", { class: "details", href: "/incident/" + encodeURIComponent(inc.number), target: "_blank", rel: "noopener", text: "Open details and notes →" }),
+  ]);
+  for (const [key, label] of TEAMS) {
+    card.appendChild(teamBlock(inc.number, key, label, swat[key] || {}));
+  }
+  return card;
+}
+
 function render(data) {
   lastData = data;
-  renderFilters();
+  renderStats(data);
+  renderFilters(data);
   const grid = document.getElementById("grid");
   grid.replaceChildren();
-  if (!data.incidents.length) {
-    grid.appendChild(el("div", { class: "empty", text: "No incidents in incidents.json yet." }));
+  if (!data.incidents || !data.incidents.length) {
+    grid.appendChild(el("div", { class: "empty" }, [el("b", { text: "No incidents yet" }), document.createTextNode("Incidents appear here after the monitor's next check.")]));
     return;
   }
-  const shown = data.incidents.filter((i) => stateFilter === "All" || i.state === stateFilter);
+  const shown = data.incidents.filter(matches);
   if (!shown.length) {
-    grid.appendChild(el("div", { class: "empty", text: `No ${stateFilter} incidents.` }));
+    grid.appendChild(el("div", { class: "empty" }, [el("b", { text: "Nothing matches" }), document.createTextNode("Change the filter or the search text.")]));
     return;
   }
   for (const inc of shown) {
-    const swat = (data.swat && data.swat[inc.number]) || {};
-    const state = inc.state || "In Progress";
-    const card = el("div", { class: "card" }, [
-      el("h2", {}, [el("span", { text: inc.number }), el("span", { class: "pri", text: inc.priority || "-" })]),
-      el("div", { class: "row" }, [
-        el("span", { class: "state " + stateClass(state), text: state + (inc.state_at ? " since " + inc.state_at : "") }),
-      ]),
-      el("div", { class: "text", text: inc.text }),
-      el("div", { class: "text", text: inc.text }),
-      el("a", { class: "details", href: "/incident/" + encodeURIComponent(inc.number), target: "_blank", rel: "noopener", text: "Open details & notes (new page)" }),
-    ]);
-    for (const [key, label] of TEAMS) {
-      card.appendChild(teamBlock(inc.number, key, label, swat[key] || {}));
-    }
-    grid.appendChild(card);
+    grid.appendChild(renderCard(inc, (data.swat && data.swat[inc.number]) || {}));
   }
 }
 
