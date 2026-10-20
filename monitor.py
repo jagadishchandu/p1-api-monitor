@@ -36,6 +36,7 @@ import requests
 import urllib3
 from azure.core import MatchConditions
 from azure.core.exceptions import AzureError, ResourceExistsError, ResourceModifiedError, ResourceNotFoundError
+from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient, ContentSettings
 
 
@@ -102,7 +103,9 @@ def load_config() -> dict:
         "sn_instance": os.environ.get("SN_INSTANCE", "").strip(),
         "sn_client_id": os.environ.get("SN_CLIENT_ID", "").strip(),
         "sn_client_secret": os.environ.get("SN_CLIENT_SECRET", ""),
-        "storage_connection_string": os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "").strip(),
+        # Account URL only, for example https://stp1apimonjc01.blob.core.windows.net. No key or secret is needed:
+        # the app signs in with its managed identity (see init_storage).
+        "storage_account_url": os.environ.get("AZURE_STORAGE_ACCOUNT_URL", "").strip().rstrip("/"),
         "storage_container": os.environ.get("AZURE_STORAGE_CONTAINER", "p1-api-monitor").strip(),
         "storage_folder": os.environ.get("AZURE_STORAGE_FOLDER", "p1-api-monitor").strip().strip("/"),
         "teams_webhook_urls": env_list("TEAMS_WEBHOOK_URLS"),
@@ -128,7 +131,7 @@ def load_config() -> dict:
     required = [
         ("SN_CLIENT_ID", "sn_client_id"),
         ("SN_CLIENT_SECRET", "sn_client_secret"),
-        ("AZURE_STORAGE_CONNECTION_STRING", "storage_connection_string"),
+        ("AZURE_STORAGE_ACCOUNT_URL", "storage_account_url"),
     ]
     missing = [name for name, key in required if not config[key]]
     if missing:
@@ -893,8 +896,10 @@ FOLDER_MARKER = ".folder"  # empty placeholder blob, so an empty folder shows up
 
 def init_storage(config: dict) -> None:
     """Connect to the storage account, create the container and folders if they are missing.
+    Uses the app's managed identity (Storage Blob Data Contributor on the account), so no key is stored.
+    Locally, DefaultAzureCredential falls back to your `az login` account, which needs the same role.
     Raises ValueError or AzureError."""
-    service = BlobServiceClient.from_connection_string(config["storage_connection_string"])
+    service = BlobServiceClient(account_url=config["storage_account_url"], credential=DefaultAzureCredential())
     container = service.get_container_client(config["storage_container"])
     try:
         container.create_container()

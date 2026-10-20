@@ -6,7 +6,7 @@ Watches ServiceNow incidents through the **ServiceNow REST Table API** and:
 - keeps a **SWAT board** (port **8080**) where SWAT teams mark which teams are Required, who joined, and fill in the intake form. The board can filter **In Progress**, **On Hold** and **Resolved** incidents, so intake forms can be created for resolved incidents too
 - checks ServiceNow every **15 minutes** by default (`MONITOR_INTERVAL_MINUTES`)
 - runs in **Docker**
-- keeps its data (incidents, SWAT choices and notes) in an **Azure Storage** container, not on the local disk. Give it the connection string and it **creates the container and folders by itself** on first start
+- keeps its data (incidents, SWAT choices and notes) in an **Azure Storage** container, not on the local disk. It reaches the storage account with a **managed identity**, so no key or connection string is stored. The deployment script creates the container and grants the role
 
 This replaces the older Selenium version (`P1-ui-monitor`). There is no browser, no Okta login and no MFA prompt, so it can run unattended on a server.
 
@@ -38,7 +38,7 @@ This replaces the older Selenium version (`P1-ui-monitor`). There is no browser,
 |---|---|---|
 | ServiceNow instance name | The part before `.service-now.com`, e.g. `acmecorp` for `https://acmecorp.service-now.com` | You already know it |
 | ServiceNow OAuth application | A Client ID and Client Secret for an OAuth application that runs as a read-only service account with access to the **incident** table | ServiceNow admin (see [section 2](#2-create-the-servicenow-oauth-application)) |
-| Azure Storage account | A storage account with one blob container. Its connection string goes in `.env` (see [section 6](#azure-storage-connection-string)) | Your Azure admin, or you |
+| Azure Storage account | A storage account with one blob container. Its URL goes in `.env`, and the app's identity gets Storage Blob Data Contributor (see [section 6](#azure-storage-access-with-a-managed-identity)) | Your Azure admin, or you |
 | Docker Desktop (Windows/Mac) or Docker Engine (Linux) | Runs the container | Install from docker.com |
 | Network access | The machine running Docker must reach `https://<instance>.service-now.com` and `<storage-account>.blob.core.windows.net` (port 443), and `hooks.powerautomate.com` / your SMTP server if you use those alerts | Your IT / firewall team |
 | Teams webhook URL(s) (optional) | Power Automate "When a HTTP request is received" flow URL. Needed for Teams cards | Whoever owns the Teams channel flow |
@@ -163,7 +163,7 @@ The `.env` file holds every setting. It is read when the container starts. The i
    SN_INSTANCE=acmecorp
    SN_CLIENT_ID=your-oauth-client-id
    SN_CLIENT_SECRET=your-oauth-client-secret
-   AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net
+   AZURE_STORAGE_ACCOUNT_URL=https://<storage-account>.blob.core.windows.net
    ```
 
 3. Optional: `TEAMS_WEBHOOK_URLS`, the `EMAIL_*` and `SMTP_*` settings, `MONITOR_INTERVAL_MINUTES`, and `SWAT_BOARD_PUBLIC_URL`.
@@ -176,23 +176,46 @@ The `.env` file holds every setting. It is read when the container starts. The i
 - Lines starting with `#` are comments.
 - Never commit `.env` to git. It is already in `.gitignore` and `.dockerignore`.
 
-### Azure Storage connection string
+### Azure Storage access with a managed identity
 
-The monitor keeps `incidents.json`, `swat_status.json` and `swat_details/` as blobs in one **container** of an **Azure Storage account**, inside a **folder** you choose. Set these in `.env`:
+The monitor keeps `incidents.json`, `swat_status.json` and `swat_details/` as blobs in one **container** of an **Azure Storage account**, inside a **folder** you choose. It reaches the account with a **managed identity**, so there is **no account key and no connection string** anywhere. Set these in `.env`:
 
 | Setting | Meaning |
 |---|---|
-| `AZURE_STORAGE_CONNECTION_STRING` | Connection string of the storage account (required). It contains the account key, so treat it like a password |
-| `AZURE_STORAGE_CONTAINER` | The blob container. Created automatically if it is missing. Default `p1-api-monitor` |
+| `AZURE_STORAGE_ACCOUNT_URL` | Blob endpoint of the storage account (required), for example `https://stp1apimonjc01.blob.core.windows.net`. It is an address, not a secret |
+| `AZURE_STORAGE_CONTAINER` | The blob container. Created by the deployment script. Default `p1-api-monitor` |
 | `AZURE_STORAGE_FOLDER` | The folder inside the container. Default `p1-api-monitor`. Use a different folder for test and production |
 
-To get the connection string, in the Azure portal open the storage account, then **Security + networking > Access keys > Connection string**. Or use the Azure CLI:
+Find the URL in the Azure portal: **Storage account > Overview > Properties > Primary endpoints > Blob service**. Or use the Azure CLI:
 
 ```bash
-az storage account show-connection-string --name <storage-account> --resource-group <resource-group> --query connectionString -o tsv
+az storage account show --name <storage-account> --resource-group <resource-group> --query primaryEndpoints.blob -o tsv
 ```
 
-**Automatic setup (new):** you don't need to create the container or the folders. When the monitor starts with a valid connection string, it does this for you:
+**How access works**
+
+1. In Azure Container Apps, the app has a **system-assigned managed identity**. Azure creates it for the app and its identity can't be copied elsewhere.
+2. The identity has the **Storage Blob Data Contributor** role on the storage account. The deployment script grants it.
+3. At start-up the monitor calls `DefaultAzureCredential`, which gets a token for the identity. Every blob read and write uses that token.
+
+**Roles needed in Azure**
+
+| Who | Role | Scope | Why |
+|---|---|---|---|
+| The app's managed identity (created by the script) | **Storage Blob Data Contributor** | The storage account | Read and write `incidents.json`, `swat_status.json` and `swat_details/` |
+| The person running `deploy-azure.ps1` | **Contributor** | The resource groups used by the script | Create the storage account, registry, Container Apps environment and app |
+| The person running `deploy-azure.ps1` | **Owner**, or **User Access Administrator** plus Contributor | The storage account | Create the role assignment for the app's identity |
+| A developer testing on their own PC | **Storage Blob Data Contributor** | A test storage account | Local runs use your `az login` account, so that account needs the same data role |
+
+Do **not** give the app `Contributor` or `Owner`. Those roles can change the account and read keys, which the app doesn't need. **Storage Blob Data Contributor** is a *data-plane* role: it allows reading and writing blobs, not managing the account.
+
+**Local test on your PC**
+
+1. Sign in with `az login`.
+2. Give your user **Storage Blob Data Contributor** on the test storage account.
+3. Set `AZURE_STORAGE_ACCOUNT_URL` in `.env` to that account's URL and run the monitor. Use a test storage account in Azure, not a local emulator, because the managed-identity sign-in needs a real Entra ID account.
+
+**Automatic setup:** you don't need to create the container or the folders. When the monitor starts with a valid account URL and the role in place, it does this for you:
 
 | Created if missing | Name in Azure Storage | Notes |
 |---|---|---|
@@ -202,13 +225,13 @@ az storage account show-connection-string --name <storage-account> --resource-gr
 
 Blob storage has no real folders, so each folder is created as an empty placeholder blob named `.folder`. It shows up in Azure Storage Explorer and is harmless. Restarting the monitor doesn't duplicate anything.
 
-The connection string needs permission to create containers, which the account key has. If you prefer to create the container yourself, use:
+The container is normally created by `deploy-azure.ps1` through the management API. At start-up the monitor also tries to create it: if it already exists, the monitor carries on. If it is missing and the identity can't create containers, the monitor stops with an authorization error. So if you delete the container, run the deployment script again, or create the container with your own account:
 
 ```bash
-az storage container create --name p1-api-monitor --connection-string "<connection-string>"
+az storage container create --name p1-api-monitor --account-name <storage-account> --auth-mode login
 ```
 
-**Security:** keep the connection string in `.env` on the server only. In Azure Container Apps, store it as a secret (section 14). For a test on your own PC you can use Azurite, Azure's local storage emulator, with `AZURE_STORAGE_CONNECTION_STRING=UseDevelopmentStorage=true`.
+**Security:** nothing secret is stored. `.env` holds only the account URL, and the access comes from the managed identity. If the identity's role is removed, the monitor fails with an authorization error until the role is granted again.
 
 ---
 
@@ -383,7 +406,7 @@ All settings are environment variables in `.env`.
 | `SWAT_BOARD_ENABLED` | No | `true` | Turn the SWAT board on or off |
 | `SWAT_BOARD_PORT` | No | `8080` | Port the board listens on inside the container. Keep `8080` unless you change the port mapping too |
 | `SWAT_BOARD_PUBLIC_URL` | No | built-in default `http://localhost:8080` | Address written on the Teams card's "Open SWAT board" button. Set the default at build time with `--build-arg SWAT_BOARD_PUBLIC_URL=...` |
-| `AZURE_STORAGE_CONNECTION_STRING` | Yes | - | Azure Storage connection string. Contains the account key |
+| `AZURE_STORAGE_ACCOUNT_URL` | Yes | - | Blob endpoint of the storage account, for example `https://stp1apimonjc01.blob.core.windows.net`. Access is by managed identity, not a key |
 | `AZURE_STORAGE_CONTAINER` | No | `p1-api-monitor` | Blob container. Created automatically if missing |
 | `AZURE_STORAGE_FOLDER` | No | `p1-api-monitor` | Folder inside the container for `incidents.json`, `swat_status.json` and `swat_details/` |
 
@@ -395,12 +418,12 @@ All settings are environment variables in `.env`.
 
 | Symptom | What to check |
 |---|---|
-| `missing required environment variable(s): ...` | A required value (`SN_CLIENT_ID`, `SN_CLIENT_SECRET` or `AZURE_STORAGE_CONNECTION_STRING`) is missing from `.env`, or the name is misspelled. Run `docker compose config` to see what the container receives |
+| `missing required environment variable(s): ...` | A required value (`SN_CLIENT_ID`, `SN_CLIENT_SECRET` or `AZURE_STORAGE_ACCOUNT_URL`) is missing from `.env`, or the name is misspelled. Run `docker compose config` to see what the container receives |
 | `ServiceNow rejected the login (HTTP 401)` | Wrong Client ID or secret, OAuth application inactive, or it doesn't run as the service account. Test with the commands in [section 3](#3-check-the-oauth-login-and-api-access) |
 | `ServiceNow refused access (HTTP 403)` | The account lacks read access to the incident table. Ask the admin for the `itil` role or a read ACL |
 | `OAuth token request failed (HTTP 400/401)` | Client ID or secret is wrong, or the OAuth application is inactive. Test with the token command in section 3 |
-| `could not create the storage container` or `not authorized` | The connection string's account key can't create containers. Use the account key connection string from the portal (section 6) |
-| `AuthenticationFailed` or `Server failed to authenticate the request` | The storage connection string is wrong, or the account key was rotated. Copy the connection string again |
+| `AuthorizationPermissionMismatch` or `This request is not authorized to perform this operation` | The identity (or your `az login` account when running locally) lacks **Storage Blob Data Contributor** on the storage account. See section 6 |
+| `DefaultAzureCredential failed to retrieve a token` | Running locally: run `az login` first. In Azure: the app has no managed identity. Check **Identity** on the container app, then run the deployment script again |
 | `OAuth token response did not contain an access_token` | The token endpoint returned an error page. Check the instance name and that client credentials are enabled |
 | `could not reach <instance>.service-now.com` | Docker host has no internet or proxy access, or the instance name is wrong. Try `curl` from the host |
 | `SWAT board could not start on port 8080` | Another program uses port 8080. Stop it or change the port (see section 11) |
@@ -415,9 +438,9 @@ All settings are environment variables in `.env`.
 
 ## 13. Security notes
 
-- `.env` contains the OAuth client secret, the Azure Storage connection string (it includes the account key) and webhook secrets. Keep it on the server only. Don't email it or paste it in chat or tickets.
+- `.env` contains the OAuth client secret and webhook secrets. It no longer contains a storage key. Keep it on the server only. Don't email it or paste it in chat or tickets.
 - Use a **read-only** service account. It should not have write or admin rights.
-- The monitor uses **OAuth** only. The access token is kept in memory and is never written to disk. The client secret and the storage connection string are the long-lived secrets in `.env`.
+- The monitor uses **OAuth** only. The access token is kept in memory and is never written to disk. The ServiceNow client secret is the only long-lived secret in `.env`. Storage access uses a managed identity, so there is no storage key to rotate or leak.
 - Rotate the OAuth client secret and the storage account key on the schedule your admin sets. After rotating, update `.env` (or the Container Apps secrets) and restart the monitor.
 - The SWAT board has **no login**. Anyone who can reach port 8080 can change team choices and read notes. Limit access to the network, or put it behind your company's reverse proxy with authentication.
 - The Teams webhook URL is a secret. Anyone with it can post to the channel.
@@ -507,7 +530,7 @@ az acr build --registry $ACR --image p1-api-monitor:latest .
 
 ### Step 5: Create the storage account and container
 
-The monitor keeps its data in Blob Storage. Create a storage account, and the monitor creates the container and folders on first start. The connection string goes into the app secrets in step 7.
+The monitor keeps its data in Blob Storage. The deployment script creates the storage account and container, gives the app's managed identity **Storage Blob Data Contributor**, and sets `AZURE_STORAGE_ACCOUNT_URL` on the app. No key is stored. See section 6 for the roles.
 
 ```bash
 az storage account create --name $STG --resource-group $RG --location $LOC --sku Standard_LRS --kind StorageV2
@@ -568,8 +591,6 @@ properties:
         value: <ACR_PASSWORD>
       - name: client-secret
         value: <SN_CLIENT_SECRET from your .env>
-      - name: storage-connection-string
-        value: <STG_CONN from step 5>
       - name: teams-webhook
         value: <TEAMS_WEBHOOK_URLS from your .env>
   template:
@@ -583,8 +604,8 @@ properties:
             value: <SN_CLIENT_ID from your .env>
           - name: SN_CLIENT_SECRET
             secretRef: client-secret
-          - name: AZURE_STORAGE_CONNECTION_STRING
-            secretRef: storage-connection-string
+          - name: AZURE_STORAGE_ACCOUNT_URL
+            value: https://<storage-account>.blob.core.windows.net
           - name: AZURE_STORAGE_CONTAINER
             value: p1-api-monitor
           - name: AZURE_STORAGE_FOLDER
@@ -604,7 +625,7 @@ properties:
 
 ```
 
-If you don't use Teams, delete the `teams-webhook` secret and the `TEAMS_WEBHOOK_URLS` env entry. Add any other settings from [section 11](#11-settings-reference) the same way, as `env` entries. Use `secretRef` for passwords, webhook URLs and SMTP passwords. Put `SN_CLIENT_SECRET` and `AZURE_STORAGE_CONNECTION_STRING` in `secrets` and reference them with `secretRef`. Never write them as plain values.
+If you don't use Teams, delete the `teams-webhook` secret and the `TEAMS_WEBHOOK_URLS` env entry. Add any other settings from [section 11](#11-settings-reference) the same way, as `env` entries. Use `secretRef` for passwords, webhook URLs and SMTP passwords. Put `SN_CLIENT_SECRET` in `secrets` and reference it with `secretRef`. Never write it as a plain value. `AZURE_STORAGE_ACCOUNT_URL` is an address, not a secret, so it can be a plain value. The app also needs a system-assigned managed identity with Storage Blob Data Contributor on the storage account (section 6).
 
 ### Step 8: Deploy the app
 
@@ -669,8 +690,8 @@ az group delete --name $RG --yes --no-wait
 |---|---|
 | `containerapp.yaml` is rejected | YAML is indentation-sensitive. Use spaces, not tabs. `<...>` placeholders must all be replaced |
 | The app shows **Failed** or keeps restarting | `az containerapp logs show --name $APP --resource-group $RG --tail 100`. Usually a wrong setting or secret |
-| The monitor can't create the container | Check the `storage-connection-string` secret. The monitor creates the container and folders on first start |
-| `AuthenticationFailed` | The `storage-connection-string` secret is wrong, or the storage key was rotated. Copy the connection string again |
+| `AuthorizationPermissionMismatch` on start | The app's managed identity lacks Storage Blob Data Contributor on the storage account. Check **Identity** on the container app and the role assignment on the storage account (section 6) |
+| `DefaultAzureCredential failed to retrieve a token` | The app has no managed identity. Turn on **System assigned** under **Identity**, grant the role, then restart the app |
 | Image pull fails | Check that the ACR admin user is enabled and that the `registries` block uses the right password |
 | The SWAT board opens for anyone | Turn on the `ipSecurityRestrictions` lines in `containerapp.yaml` and update the app |
 | Costs are higher than expected | Check `minReplicas` is `1` (scale to zero stops the monitor), and check the region in the pricing calculator |
@@ -688,7 +709,7 @@ The current deployment (section 14) runs the monitor as one always-on container.
 | 15-minute check | A loop inside the container | A **timer trigger**, schedule `0 */15 * * * *` (NCRONTAB, UTC) |
 | Monthly report and clean-up | A check at the start of the loop | A second **timer trigger**, schedule `0 0 0 1 * *` (00:00 on the 1st, UTC) |
 | SWAT board (HTTP on port 8080) | A small HTTP server started inside the container | **Not supported as it is.** A Function App does not run an arbitrary server on port 8080. See the two choices below |
-| Data | Blob storage | Same blob storage (the connection string is the same) |
+| Data | Blob storage | Same blob storage (the account URL is the same, and the same managed identity is used) |
 | Settings and secrets | Container Apps secrets | Function App **application settings** (use Key Vault references for secrets) |
 
 ### The SWAT board needs one of two choices
@@ -702,7 +723,7 @@ If you only need the alerts and the monthly report, the timer triggers alone run
 
 1. **Create the storage account** for the Function App's own runtime files (`AzureWebJobsStorage`). This is separate from the data storage account used by the monitor.
 2. **Create the Function App:** Python 3.12, Linux, and the plan you chose (Consumption for timers only, Premium or Dedicated for the custom container).
-3. **Add the application settings** from `.env`: `SN_INSTANCE`, `SN_CLIENT_ID`, `SN_CLIENT_SECRET`, `AZURE_STORAGE_CONNECTION_STRING`, `AZURE_STORAGE_CONTAINER`, `AZURE_STORAGE_FOLDER`, `TEAMS_WEBHOOK_URLS`, and any email settings. For secrets, store them in Key Vault and reference them.
+3. **Add the application settings** from `.env`: `SN_INSTANCE`, `SN_CLIENT_ID`, `SN_CLIENT_SECRET`, `AZURE_STORAGE_ACCOUNT_URL`, `AZURE_STORAGE_CONTAINER`, `AZURE_STORAGE_FOLDER`, `TEAMS_WEBHOOK_URLS`, and any email settings. For secrets, store them in Key Vault and reference them.
 4. **Add the timer functions**, one that calls `check_once(config)` every 15 minutes and one that calls `run_monthly_report_if_due(config)` every hour. The hourly job runs the report only on the 1st, so the schedule is `0 0 * * * *`. Make sure the timer triggers cannot overlap: use one function app instance.
 5. **Deploy the code** with Azure Functions Core Tools (`func azure functionapp publish <app-name>`), or with the deployment options in the portal.
 6. **Check the logs** in the Function App under **Monitor**, and confirm the next run times in the timer trigger's details.

@@ -15,5 +15,5 @@ services:
       # Host port 8080 -> SWAT board inside the container (port 8080).
       - "8080:8080"
     # incidents.json, swat_status.json and swat_details/ are stored in Azure Storage
-    # (AZURE_STORAGE_CONNECTION_STRING in .env), so no volume is needed.
+    # (AZURE_STORAGE_ACCOUNT_URL in .env), so no volume is needed.
     restart: unless-stopped

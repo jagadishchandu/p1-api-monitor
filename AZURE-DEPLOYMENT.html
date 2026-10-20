@@ -186,9 +186,9 @@
     <p class="kicker">Run these from the <code>P1-api-monitor</code> folder. The full details are in <code>README-powershell.md</code>.</p>
     <ol class="steps">
       <li><div><b>Install the requirements</b><span>Azure PowerShell (<code>Install-Module Az -Scope CurrentUser</code>) and Docker Desktop, running.</span></div></li>
-      <li><div><b>Fill in <code>.env</code></b><span>Copy <code>.env.example</code> to <code>.env</code>. Set <code>SN_INSTANCE</code>, <code>SN_CLIENT_ID</code> and <code>SN_CLIENT_SECRET</code>. Leave the storage connection string empty on a first run.</span></div></li>
+      <li><div><b>Fill in <code>.env</code></b><span>Copy <code>.env.example</code> to <code>.env</code>. Set <code>SN_INSTANCE</code>, <code>SN_CLIENT_ID</code> and <code>SN_CLIENT_SECRET</code>. Leave <code>AZURE_STORAGE_ACCOUNT_URL</code> empty on a first run. The script fills it in for the account it creates.</span></div></li>
       <li><div><b>Run the script</b><span><code>powershell -ExecutionPolicy Bypass -File .\deploy-azure.ps1</code>. Sign in with the device code shown.</span></div></li>
-      <li><div><b>Copy the storage connection string</b><span>If the script created a storage account, it writes <code>storage-connection.txt</code>. Copy its <code>AZURE_STORAGE_CONNECTION_STRING</code> line into <code>.env</code>, save, and type <code>YES</code> at the prompt.</span></div></li>
+      <li><div><b>Grant storage access by managed identity</b><span>The script creates the storage account and container if needed, turns on a managed identity for the app, and gives that identity <b>Storage Blob Data Contributor</b> on the storage account. No key is written and nothing is typed at a prompt.</span></div></li>
       <li><div><b>Wait for the build and push</b><span>The image is built on your PC and pushed to the registry. The environment takes a few minutes to appear.</span></div></li>
       <li><div><b>Open the SWAT board</b><span>The script prints the <code>https://</code> address. Check the log in the portal under Monitoring &gt; Log stream.</span></div></li>
     </ol>
@@ -198,7 +198,7 @@
   <section>
     <h2>Security and cost safeguards</h2>
     <div class="cards">
-      <div class="card"><h3>Secrets</h3><p>The OAuth client secret and the storage connection string are Container Apps secrets, not plain values.</p></div>
+      <div class="card"><h3>Secrets</h3><p>The OAuth client secret is a Container Apps secret, not a plain value. Storage access uses a managed identity, so no storage key is stored anywhere.</p></div>
       <div class="card"><h3>Network</h3><p>With <code>-AllowedIpRange</code>, only that address range can reach the app.</p></div>
       <div class="card"><h3>Registry</h3><p>The admin user is on for simplicity. Turn it off and use a managed identity if your policy requires it.</p></div>
       <div class="card"><h3>One replica</h3><p>Only one copy runs, so alerts are not sent twice and the data files are not written by two copies.</p></div>

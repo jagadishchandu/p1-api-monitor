@@ -227,9 +227,9 @@ $defaultStorageName = "stp1apimon$Suffix"
 $registryName = "acrp1apimon$Suffix"
 
 # The storage account named in .env is used only when it exists in the storage place. Otherwise it is ignored.
-$envConn = $settings["AZURE_STORAGE_CONNECTION_STRING"]
+$envUrl = $settings["AZURE_STORAGE_ACCOUNT_URL"]
 $envAccountName = ""
-if ($envConn -match 'AccountName=([^;]+)') { $envAccountName = $Matches[1] }
+if ($envUrl -match 'https://([^.]+)\.blob\.') { $envAccountName = $Matches[1] }
 $envAccountFound = $false
 if ($envAccountName) {
   $envAccountFound = [bool](Find-InPlace $storagePlace "Microsoft.Storage/storageAccounts" $envAccountName)
@@ -248,7 +248,7 @@ Write-Status "Storage account $storageName" $storagePlace ([bool]$storageRef)
 Write-Status "Container registry $registryName" $registryPlace ([bool]$registryRef)
 Write-Status "Container Apps environment $EnvironmentName" $environmentPlace ([bool]$envRef)
 Write-Status "Container app $AppName" $appPlace ([bool]$appRef)
-if ($envConn -and -not $envAccountFound) {
+if ($envUrl -and -not $envAccountFound) {
   Write-Host "The storage account in .env ($envAccountName) was not found in its storage place, so it is ignored." -ForegroundColor Yellow
 }
 
@@ -269,7 +269,8 @@ if (-not $storageRef) {
   Ensure-Group $storagePlace
   Use-Subscription $storagePlace.Sub
   New-AzStorageAccount -ResourceGroupName $storagePlace.Rg -Name $storageName -Location $Location `
-    -SkuName Standard_LRS -Kind StorageV2 -MinimumTlsVersion TLS1_2 -AllowBlobPublicAccess $false | Out-Null
+    -SkuName Standard_LRS -Kind StorageV2 -MinimumTlsVersion TLS1_2 -AllowBlobPublicAccess $false `
+    -AllowSharedKeyAccess $false | Out-Null
   $storageCreated = $true
   Write-Host "Storage account $storageName created."
 }
@@ -277,8 +278,9 @@ else {
   Write-Host "Storage account $storageName exists. Reusing it."
 }
 Use-Subscription $storagePlace.Sub
-$key = (Get-AzStorageAccountKey -ResourceGroupName $storagePlace.Rg -Name $storageName)[0].Value
-$storageConn = "DefaultEndpointsProtocol=https;AccountName=$storageName;AccountKey=$key;EndpointSuffix=core.windows.net"
+
+# The app gets this URL, not a key. Access comes from the app's managed identity, granted further down.
+$storageUrl = "https://$storageName.blob.core.windows.net"
 
 # The container is created through the management API, so no data-plane call is needed.
 $container = Get-IfExists { Get-AzRmStorageContainer -ResourceGroupName $storagePlace.Rg -StorageAccountName $storageName -Name $StorageContainer -ErrorAction SilentlyContinue }
@@ -289,32 +291,9 @@ if ($container) {
   Write-Host "Container $StorageContainer created."
 }
 
-# .env needs the value when the account was just created, or when .env names an account that is not used.
-$staleEnvString = [bool]$envConn -and -not $envAccountFound
-if ($storageCreated -or $staleEnvString) {
-  # The file holds the storage key. It is listed in .gitignore and .dockerignore.
-  $storageFile = Join-Path $PSScriptRoot "storage-connection.txt"
-  $lines = @(
-    "Azure Storage details created by deploy-azure.ps1",
-    "KEEP THIS FILE PRIVATE. It contains the storage account key.",
-    "",
-    "Subscription:     $($storagePlace.Sub)",
-    "Resource group:   $($storagePlace.Rg)",
-    "Storage account:  $storageName",
-    "Container:        $StorageContainer",
-    "Folder:           $StorageFolder",
-    "",
-    "Copy the next line into .env, replacing the empty AZURE_STORAGE_CONNECTION_STRING= line:",
-    "AZURE_STORAGE_CONNECTION_STRING=$storageConn"
-  )
-  [System.IO.File]::WriteAllText($storageFile, (($lines -join "`r`n") + "`r`n"), [System.Text.UTF8Encoding]::new($false))
-  Write-Host "Storage details written to: $storageFile" -ForegroundColor Green
-  do {
-    $answer = (Read-Host "Copy AZURE_STORAGE_CONNECTION_STRING from that file into .env and save it. Type YES to continue, or NO to stop").Trim()
-    if ($answer -eq "NO") { throw "Stopped. Update .env, then run the script again." }
-  } while ($answer -ne "YES")
-  $settings = Read-EnvFile $EnvFile
-  if (-not $settings["AZURE_STORAGE_CONNECTION_STRING"]) { throw "AZURE_STORAGE_CONNECTION_STRING is still empty in .env." }
+# No key file and no prompt: the app reads the account URL from .env, and its managed identity gets the role below.
+if ($storageCreated) {
+  Write-Host "Storage account created. Its URL is $storageUrl. The app uses its managed identity, so no key is needed." -ForegroundColor Green
 }
 
 # ---------------------------------------------------------------- container registry
@@ -448,7 +427,7 @@ finally {
 # Every value from .env is stored as a Container Apps secret. The environment variables refer to the secrets with secretRef,
 # so no setting appears in plain text in the app's configuration.
 $appVariableNames = @(
-  "SN_INSTANCE", "SN_CLIENT_ID", "SN_CLIENT_SECRET", "AZURE_STORAGE_CONNECTION_STRING",
+  "SN_INSTANCE", "SN_CLIENT_ID", "SN_CLIENT_SECRET", "AZURE_STORAGE_ACCOUNT_URL",
   "AZURE_STORAGE_CONTAINER", "AZURE_STORAGE_FOLDER", "SWAT_BOARD_ENABLED", "SWAT_BOARD_PORT",
   "SWAT_BOARD_PUBLIC_URL", "MONITOR_INTERVAL_MINUTES", "TEAMS_WEBHOOK_URLS", "TEAMS_VERIFY_SSL",
   "EMAIL_TO", "EMAIL_CC", "EMAIL_BCC", "SMTP_HOST", "SMTP_PORT", "SMTP_STARTTLS", "SMTP_USER",
@@ -467,7 +446,7 @@ function New-AppSettings([string]$PublicUrl) {
   $values = @{}
   foreach ($name in $appVariableNames) { $values[$name] = $settings[$name] }
   # Values the script sets itself take precedence over .env.
-  $values["AZURE_STORAGE_CONNECTION_STRING"] = $storageConn
+  $values["AZURE_STORAGE_ACCOUNT_URL"] = $storageUrl
   $values["AZURE_STORAGE_CONTAINER"] = $StorageContainer
   $values["AZURE_STORAGE_FOLDER"] = $StorageFolder
   $values["SWAT_BOARD_PORT"] = "8080"
@@ -512,6 +491,53 @@ function New-AppProperties([string]$PublicUrl) {
 
 # ---------------------------------------------------------------- create or update the app
 
+# Creates or replaces the app with one PUT. The system-assigned identity is part of the same body,
+# so an update can't remove it.
+function Save-ContainerApp([string]$PublicUrl) {
+  $body = @{
+    location   = $Location
+    identity   = @{ type = "SystemAssigned" }
+    properties = New-AppProperties $PublicUrl
+  } | ConvertTo-Json -Depth 30
+  $path = "/subscriptions/$($appPlace.Sub)/resourceGroups/$($appPlace.Rg)/providers/Microsoft.App/containerApps/$($AppName)?api-version=$ApiVersion"
+  $response = Invoke-AzRestMethod -Method PUT -Path $path -Payload $body
+  if ($response.StatusCode -notin 200, 201) { throw "Saving container app $AppName failed ($($response.StatusCode)): $($response.Content)" }
+}
+
+# Gives the app's managed identity read and write access to blobs in the storage account, and nothing else.
+# Storage Blob Data Contributor is a data-plane role: it does not allow listing keys or changing the account.
+function Grant-StorageAccess {
+  $path = "/subscriptions/$($appPlace.Sub)/resourceGroups/$($appPlace.Rg)/providers/Microsoft.App/containerApps/$($AppName)?api-version=$ApiVersion"
+  $principal = $null
+  for ($tries = 0; -not $principal -and $tries -lt 12; $tries++) {
+    $current = Invoke-AzRestMethod -Method GET -Path $path
+    $principal = ($current.Content | ConvertFrom-Json).identity.principalId
+    if (-not $principal) { Start-Sleep -Seconds 10 }
+  }
+  if (-not $principal) { throw "Container app $AppName has no managed identity yet. Run the script again in a few minutes." }
+
+  $scope = (Get-AzStorageAccount -ResourceGroupName $storagePlace.Rg -Name $storageName).Id
+  $role = "Storage Blob Data Contributor"
+  $existing = Get-AzRoleAssignment -ObjectId $principal -Scope $scope -RoleDefinitionName $role -ErrorAction SilentlyContinue
+  if ($existing) {
+    Write-Host "The app identity already has $role on $storageName."
+    return
+  }
+  # A new identity can take a short while to appear in Microsoft Entra ID, so retry if it is not found yet.
+  for ($tries = 0; $tries -lt 8; $tries++) {
+    try {
+      New-AzRoleAssignment -ObjectId $principal -RoleDefinitionName $role -Scope $scope | Out-Null
+      Write-Host "Granted $role on $storageName to the app identity."
+      return
+    } catch {
+      if ($tries -eq 7) {
+        throw "Could not grant $role on $storageName. Run this script as a user with Owner, or User Access Administrator plus Contributor, on the storage account. Details: $($_.Exception.Message)"
+      }
+      Start-Sleep -Seconds 15
+    }
+  }
+}
+
 Write-Step "Container app $AppName"
 # -Force replaces the app with these settings. It creates the app if it is missing, and updates it if it exists.
 $publicUrl = ""
@@ -521,9 +547,9 @@ if ($appRef -and $appRef.Properties.configuration.ingress.fqdn) {
 
 if (-not $appRef) { Ensure-Group $appPlace }
 Use-Subscription $appPlace.Sub
-New-AzResource -ResourceGroupName $appPlace.Rg -ResourceType "Microsoft.App/containerApps" -ResourceName $AppName `
-  -Location $Location -ApiVersion $ApiVersion -Properties (New-AppProperties $publicUrl) -Force | Out-Null
+Save-ContainerApp $publicUrl
 Write-Host "created or updated (image: $image)"
+Grant-StorageAccess
 
 # The public address is known only after the app exists. For a new app, read it and set the SWAT board address.
 $app = Get-AzResource -ResourceGroupName $appPlace.Rg -ResourceType "Microsoft.App/containerApps" -Name $AppName -ApiVersion $ApiVersion
@@ -540,8 +566,7 @@ if (-not $fqdn) { throw "The app was created, but its public address is not know
 
 if ($publicUrl -ne "https://$fqdn") {
   Write-Step "Setting the SWAT board address to https://$fqdn"
-  New-AzResource -ResourceGroupName $appPlace.Rg -ResourceType "Microsoft.App/containerApps" -ResourceName $AppName `
-    -Location $Location -ApiVersion $ApiVersion -Properties (New-AppProperties "https://$fqdn") -Force | Out-Null
+  Save-ContainerApp "https://$fqdn"
 }
 
 if (-not $AllowedIpRange) {

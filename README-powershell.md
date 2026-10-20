@@ -95,11 +95,11 @@ Creates the resource group in `-Location` if it does not exist.
 **Changes in Azure:** one resource group, if missing.
 
 ### 5. Storage account and container
-- If `.env` names a storage account (in `AZURE_STORAGE_CONNECTION_STRING`) that exists in the resource group, the script uses it. If not, it prints a warning and ignores that value.
+- If `.env` names a storage account (in `AZURE_STORAGE_ACCOUNT_URL`) that exists in the resource group, the script uses it. If not, it prints a warning and ignores that value.
 - Otherwise it uses `stp1apimon<suffix>`. If it does not exist, it is created with Standard LRS, StorageV2, **TLS 1.2 minimum** and **public blob access off**.
-- The storage key is read and the connection string is built from it. The key is never printed.
+- The script never reads or prints a storage key. It gives the app's managed identity the **Storage Blob Data Contributor** role on the storage account, and passes the account URL to the app.
 - The container is created through the management API (`New-AzRmStorageContainer`) with **public access off**. If it exists, it is reused.
-- **Only when the account is new, or when `.env` names an account that is not used:** the script writes `storage-connection.txt` in this folder and asks you to copy the `AZURE_STORAGE_CONNECTION_STRING=` line into `.env`. Type `YES` after saving, or `NO` to stop. `storage-connection.txt` is listed in `.gitignore` and `.dockerignore`, so it is never committed or put in the image.
+- No key file is written and the script doesn't stop to ask you to paste anything. The role grant needs **Owner**, or **User Access Administrator** plus **Contributor**, on the storage account. See the roles table in `README.md`, section 6.
 
 **Changes in Azure:** one storage account and one container, if missing.
 
@@ -129,7 +129,7 @@ Creates the resource group in `-Location` if it does not exist.
 ### 9. Creates or updates the container app
 - Creates or updates `p1-api-monitor` with **New-AzResource** (an ARM request with `-Force`).
 - Settings: external ingress on port `8080`, single revision mode, **exactly 1 replica** (minimum and maximum), 0.25 vCPU, 0.5 GiB.
-- **Secrets:** every value from `.env` is stored as a Container Apps secret, not as a plain environment variable. The registry password is a secret too. Each secret name is the variable name in lowercase with hyphens, shortened to 20 characters (for example `SN_CLIENT_SECRET` becomes `sn-client-secret`, and `AZURE_STORAGE_CONNECTION_STRING` becomes `azure-storage-connec`). Settings with an empty value are left out.
+- **Secrets:** every value from `.env` is stored as a Container Apps secret, not as a plain environment variable. The registry password is a secret too. Each secret name is the variable name in lowercase with hyphens, shortened to 20 characters (for example `SN_CLIENT_SECRET` becomes `sn-client-secret`, and `AZURE_STORAGE_ACCOUNT_URL` becomes `azure-storage-accoun`). Settings with an empty value are left out.
 - Environment variables: each setting from `.env` (and `SWAT_BOARD_PORT=8080`, `AZURE_STORAGE_CONTAINER`, `AZURE_STORAGE_FOLDER`, `SWAT_BOARD_PUBLIC_URL` set by the script) points to its secret with `secretRef`. The values themselves are only in the secrets.
 - With `-AllowedIpRange`, the ingress allows only that range.
 - For a new app, the script reads the public address and updates the app once more with `SWAT_BOARD_PUBLIC_URL=https://<address>`, so the **Open SWAT board** button in Teams uses the public address (no port, HTTPS on 443).
@@ -154,9 +154,9 @@ Calls `https://<address>/api/incidents` every 15 seconds, for up to 5 minutes. I
 | Container app | yes | yes: new revision with the new image and settings |
 | Old image tags and local images | - | removed |
 
-**On your PC:** the image is built and tagged. The Docker login lives only in a temporary folder that is deleted. `storage-connection.txt` is written only when the storage account is new or `.env` is stale.
+**On your PC:** the image is built and tagged. The Docker login lives only in a temporary folder that is deleted. No storage key file is written.
 
-**Not changed:** `.env` is only read. No repository files are changed except `storage-connection.txt`. No Azure resource is deleted, except an unprovisioned environment or an old image tag.
+**Not changed:** `.env` is only read. No repository files are changed by the script. No Azure resource is deleted, except an unprovisioned environment or an old image tag.
 
 **Re-run note:** the app's settings are replaced with what the script sends. A setting added in the portal but not in `.env` is removed on the next run. Put app settings in `.env`.
 
@@ -167,7 +167,7 @@ Calls `https://<address>/api/incidents` every 15 seconds, for up to 5 minutes. I
 - Secrets are not printed.
 - The registry admin user is on, for simplicity. Turn it off and use a managed identity if policy requires it.
 - The SWAT board has no login. Use `-AllowedIpRange`, or put the app behind an authenticated front end.
-- Keep `.env` and `storage-connection.txt` private. They hold the OAuth client secret and the storage key.
+- Keep `.env` private. It holds the OAuth client secret and webhook secrets. If an old `storage-connection.txt` is still in this folder, delete it and regenerate the storage account key, because it holds a key from before this change.
 
 ---
 

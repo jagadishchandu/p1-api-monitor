@@ -179,7 +179,7 @@
 
   <section>
     <h2>System overview</h2>
-    <p class="kicker">Data flows left to right. Alerts go out, and the board reads and writes the same saved state.</p>
+    <p class="kicker">Data flows left to right. Alerts go out, and the board reads and writes the same saved state. The app signs in to Azure Storage with its managed identity, which needs the Storage Blob Data Contributor role on the storage account.</p>
     <div class="diagram">
       <svg viewBox="0 0 960 470" role="img" aria-label="ServiceNow feeds the monitor container, which alerts Teams and email. SWAT teams use the board on port 8080.">
         <defs>
@@ -238,6 +238,19 @@
         <text x="124" y="362" text-anchor="middle" class="title">SWAT teams</text>
         <text x="124" y="384" text-anchor="middle" class="sub">Infra · Container · Network</text>
         <text x="124" y="400" text-anchor="middle" class="sub" style="font-size:11px">use the board in a browser</text>
+
+        <!-- Azure Storage account, reached through the managed identity (no key, no connection string) -->
+        <rect x="300" y="392" width="206" height="60" rx="12" fill="var(--box)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="403" y="416" text-anchor="middle" class="title" style="font-size:13px">Azure Storage account</text>
+        <text x="403" y="436" text-anchor="middle" class="sub" style="font-size:11px">container p1-api-monitor · no keys</text>
+        <rect x="530" y="392" width="122" height="60" rx="12" fill="var(--box)" stroke="var(--accent)" stroke-width="1.5"/>
+        <text x="591" y="414" text-anchor="middle" class="title" style="font-size:12px;fill:var(--accent)">Managed identity</text>
+        <text x="591" y="432" text-anchor="middle" class="sub" style="font-size:10.5px">Container App</text>
+        <path d="M590,392 L590,378" stroke="var(--accent)" stroke-width="1.6" fill="none" stroke-dasharray="4 3"/>
+        <path d="M530,422 L506,422" stroke="var(--accent)" stroke-width="1.6" fill="none" marker-end="url(#arr)"/>
+        <text x="518" y="446" text-anchor="middle" class="lbl" style="font-size:9.5px;fill:var(--accent)">Blob Data</text>
+        <path d="M380,360 L380,392" stroke="var(--arrow)" stroke-width="2.2" fill="none" marker-end="url(#arr)"/>
+        <text x="350" y="380" text-anchor="end" class="lbl">read / save</text>
 
         <!-- Arrows -->
         <path d="M224,220 L300,220" stroke="var(--arrow)" stroke-width="2.2" fill="none" marker-end="url(#arr)"/>
@@ -308,7 +321,7 @@
       <div class="file"><div class="ico">✅</div><div><code>swat_status.json</code><br><span>Which teams are Required, who joined each team, and who recorded it and when.</span></div></div>
       <div class="file"><div class="ico">📝</div><div><code>swat_details/</code><br><span>One file per incident with intake answers, RCA, timestamped notes and version history.</span></div></div>
     </div>
-    <p class="kicker" style="margin:14px 0 0">Each one is a blob in the container and folder set in <code>.env</code> (<code>AZURE_STORAGE_CONTAINER</code> and <code>AZURE_STORAGE_FOLDER</code>). Give the connection string and the container and folders are created automatically on first start, so an empty storage account is enough. Everyone who uses the board reads the same data, and the container keeps nothing locally.</p>
+    <p class="kicker" style="margin:14px 0 0">Each one is a blob in the container and folder set in <code>.env</code> (<code>AZURE_STORAGE_CONTAINER</code> and <code>AZURE_STORAGE_FOLDER</code>). The app reaches the storage account with its managed identity, which holds the Storage Blob Data Contributor role on that account. No key or connection string is stored. The deployment script creates the container and folders, and grants the role. Everyone who uses the board reads the same data, and the container keeps nothing locally.</p>
   </section>
 
   <section>
@@ -316,7 +329,7 @@
     <p class="kicker">What the tool can and cannot do.</p>
     <div class="shield">
       <div><b>Read-only to ServiceNow</b>The monitor only reads incidents. It never changes them. Login is OAuth only, with no user password.</div>
-      <div><b>Secrets stay out of files</b>The OAuth client secret, the storage connection string, webhook URLs and SMTP passwords are environment variables only.</div>
+      <div><b>Secrets stay out of files</b>The OAuth client secret, webhook URLs and SMTP passwords are environment variables only. Storage access uses a managed identity, so there is no storage key to store or rotate.</div>
       <div><b>Least privilege</b>Non-root container. Needs outbound HTTPS and SMTP only.</div>
       <div><b>Limit the board</b>No login on port 8080. Restrict it to the network or put it behind an authenticated proxy.</div>
     </div>

@@ -174,12 +174,12 @@ cp .env.example .env</code></pre>
   <pre><button class="copy" type="button">Copy</button><code>SN_INSTANCE=acmecorp
 SN_CLIENT_ID=your-oauth-client-id
 SN_CLIENT_SECRET=your-oauth-client-secret
-AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net</code></pre>
+AZURE_STORAGE_ACCOUNT_URL=https://&lt;storage-account&gt;.blob.core.windows.net</code></pre>
   <h3>Azure Storage</h3>
-  <p>The monitor keeps <code>incidents.json</code>, <code>swat_status.json</code> and <code>swat_details/</code> in one blob container of an Azure Storage account. Get the connection string from the portal: storage account &gt; <b>Security + networking</b> &gt; <b>Access keys</b> &gt; <b>Connection string</b>.</p>
+  <p>The monitor keeps <code>incidents.json</code>, <code>swat_status.json</code> and <code>swat_details/</code> in one blob container of an Azure Storage account. Set <code>AZURE_STORAGE_ACCOUNT_URL</code> to the account's blob endpoint: storage account &gt; <b>Overview</b> &gt; <b>Primary endpoints</b> &gt; <b>Blob service</b>. The app signs in with its managed identity, which needs the <b>Storage Blob Data Contributor</b> role on the account. No key is used.</p>
   <table>
     <tr><th>Setting</th><th>Meaning</th></tr>
-    <tr><td><code>AZURE_STORAGE_CONNECTION_STRING</code></td><td>Required. Contains the account key, so keep it secret</td></tr>
+    <tr><td><code>AZURE_STORAGE_ACCOUNT_URL</code></td><td>Required. Blob endpoint of the storage account. Not a secret: access uses a managed identity</td></tr>
     <tr><td><code>AZURE_STORAGE_CONTAINER</code></td><td>Blob container. Default <code>p1-api-monitor</code></td></tr>
     <tr><td><code>AZURE_STORAGE_FOLDER</code></td><td>Folder inside the container. Default <code>p1-api-monitor</code></td></tr>
   </table>
@@ -257,7 +257,7 @@ AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...;A
     <tr><th>Variable</th><th>Required</th><th>Default</th><th>Meaning</th></tr>
     <tr><td><code>SN_INSTANCE</code></td><td>Yes</td><td>-</td><td>Instance name only</td></tr>
     <tr><td><code>SN_CLIENT_ID</code> / <code>SN_CLIENT_SECRET</code></td><td>Yes</td><td>-</td><td>OAuth client credentials</td></tr>
-    <tr><td><code>AZURE_STORAGE_CONNECTION_STRING</code></td><td>Yes</td><td>-</td><td>Azure Storage connection string. Contains the account key</td></tr>
+    <tr><td><code>AZURE_STORAGE_ACCOUNT_URL</code></td><td>Yes</td><td>-</td><td>Blob endpoint of the storage account, for example <code>https://stp1apimonjc01.blob.core.windows.net</code>. Access is by managed identity, not a key</td></tr>
     <tr><td><code>AZURE_STORAGE_CONTAINER</code> / <code>AZURE_STORAGE_FOLDER</code></td><td>No</td><td><code>p1-api-monitor</code></td><td>Blob container and folder. Both are created automatically if missing</td></tr>
     <tr><td><code>TEAMS_WEBHOOK_URLS</code></td><td>No</td><td>empty</td><td>Power Automate URL(s), comma separated</td></tr>
     <tr><td><code>TEAMS_VERIFY_SSL</code></td><td>No</td><td><code>true</code></td><td>Set <code>false</code> only as a last resort behind a TLS proxy</td></tr>
@@ -276,8 +276,8 @@ AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...;A
     <tr><th>Symptom</th><th>What to check</th></tr>
     <tr><td>missing required environment variable</td><td><code>.env</code> is missing or a name is misspelled. Run <code>docker compose config</code></td></tr>
     <tr><td>HTTP 401 from ServiceNow</td><td>Wrong Client ID or secret, OAuth application inactive, or not running as the service account</td></tr>
-    <tr><td>Could not create the storage container</td><td>The connection string is wrong or lacks permission. Copy it again from the portal</td></tr>
-    <tr><td>AuthenticationFailed from Azure Storage</td><td>The account key was rotated. Copy the connection string again</td></tr>
+    <tr><td><code>AuthorizationPermissionMismatch</code></td><td>The app's managed identity lacks Storage Blob Data Contributor on the storage account. Grant it, then restart the app</td></tr>
+    <tr><td><code>DefaultAzureCredential failed to retrieve a token</code></td><td>Locally, run <code>az login</code>. In Azure, the app has no managed identity: turn on System assigned under Identity</td></tr>
     <tr><td>HTTP 403 from ServiceNow</td><td>Account lacks read access to the incident table</td></tr>
     <tr><td>OAuth token request failed</td><td>Client ID or secret wrong, or OAuth application inactive</td></tr>
     <tr><td>Could not reach service-now.com</td><td>No internet or proxy access from the host, or wrong instance name</td></tr>
@@ -292,10 +292,10 @@ AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...;A
 <section id="security">
   <h2>13. Security notes</h2>
   <ul>
-    <li><code>.env</code> holds the OAuth client secret, the storage connection string and webhook secrets. Keep it on the server only.</li>
+    <li><code>.env</code> holds the OAuth client secret and webhook secrets. It holds no storage key. Keep it on the server only.</li>
     <li>Use a read-only service account.</li>
     <li>Prefer OAuth. The access token is kept in memory only.</li>
-    <li>Rotate the OAuth client secret and the storage account key on your admin's schedule, then run <code>docker compose up -d</code>.</li>
+    <li>Rotate the OAuth client secret on your admin's schedule, then run <code>docker compose up -d</code>.</li>
     <li>The SWAT board has no login. Limit network access or put it behind an authenticated reverse proxy.</li>
     <li>The Teams webhook URL is a secret. Anyone with it can post to the channel.</li>
     <li>The container runs as a non-root user.</li>
