@@ -8,4 +8,5 @@ swat_details/
 incidents.json
 swat_status.json
 *.lock
+infra
 .git

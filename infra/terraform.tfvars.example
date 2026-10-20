@@ -1,0 +1,94 @@
+# Copy this file to terraform.tfvars and fill in your values. terraform.tfvars is git-ignored.
+# Every setting from .env.example is here with the same name, in lowercase, as a Terraform variable.
+# Secrets: give them as environment variables instead, for example:
+#   PowerShell:  $env:TF_VAR_sn_client_secret = "..."
+#   Bash:        export TF_VAR_sn_client_secret="..."
+# Do not commit terraform.tfvars or terraform.tfstate.
+
+# ---------------------------------------------------------------------------
+# Existing AKS cluster and registry
+# ---------------------------------------------------------------------------
+aks_cluster_name        = "aks-prod"
+aks_resource_group_name = "rg-aks"
+
+kubernetes_namespace = "p1-api-monitor"
+app_name             = "p1-api-monitor"
+
+# Image pushed to the existing registry. Use a version tag, not latest.
+container_image = "acrp1apimonjc01.azurecr.io/p1-api-monitor:2026.10.20-1"
+
+acr_name                = "acrp1apimonjc01"
+acr_resource_group_name = "rg-aks"
+
+# Set to false if the cluster is already attached to this registry (az aks update --attach-acr).
+grant_acr_pull = true
+
+# ---------------------------------------------------------------------------
+# Resources this Terraform creates (storage and identity)
+# ---------------------------------------------------------------------------
+location            = "eastus2"
+resource_group_name = "rg-p1-api-monitor0"
+name_suffix         = "jc01"
+
+# Leave empty to use stp1apimon<name_suffix>.
+storage_account_name = ""
+
+tags = {
+  application = "p1-api-monitor"
+  managed_by  = "terraform"
+}
+
+# Storage restrictions (optional). Empty = no network restriction.
+storage_allowed_ip_ranges          = []
+storage_virtual_network_subnet_ids = []
+
+# ---------------------------------------------------------------------------
+# .env: ServiceNow (REQUIRED)
+# ---------------------------------------------------------------------------
+sn_instance      = "yourinstance"                       # SN_INSTANCE
+sn_client_id     = "4f1c2a9e0b7d4c3a8e6f5d2b1a0c9e8f"   # SN_CLIENT_ID
+sn_client_secret = "REPLACE_WITH_SECRET"                # SN_CLIENT_SECRET (sensitive: prefer TF_VAR_sn_client_secret)
+
+# ---------------------------------------------------------------------------
+# .env: Azure Storage
+# ---------------------------------------------------------------------------
+# AZURE_STORAGE_ACCOUNT_URL is an output (azure_storage_account_url) and is set by Terraform. Not set here.
+azure_storage_container = "p1-api-monitor"              # AZURE_STORAGE_CONTAINER
+azure_storage_folder    = "p1-api-monitor"              # AZURE_STORAGE_FOLDER
+
+# ---------------------------------------------------------------------------
+# .env: Teams alerts (OPTIONAL: leave empty to turn off)
+# ---------------------------------------------------------------------------
+teams_webhook_urls = ""                                 # TEAMS_WEBHOOK_URLS (sensitive: prefer TF_VAR_teams_webhook_urls)
+teams_verify_ssl   = "true"                             # TEAMS_VERIFY_SSL
+
+# ---------------------------------------------------------------------------
+# .env: Email alerts over SMTP (OPTIONAL: leave EMAIL_TO empty to turn off)
+# ---------------------------------------------------------------------------
+email_to      = ""                                      # EMAIL_TO, comma separated
+email_cc      = ""                                      # EMAIL_CC
+email_bcc     = ""                                      # EMAIL_BCC
+smtp_host     = ""                                      # SMTP_HOST, for example smtp.company.com
+smtp_port     = "587"                                   # SMTP_PORT
+smtp_starttls = "true"                                  # SMTP_STARTTLS
+smtp_user     = ""                                      # SMTP_USER (empty for an internal relay)
+smtp_password = ""                                      # SMTP_PASSWORD (sensitive: prefer TF_VAR_smtp_password)
+smtp_from     = ""                                      # SMTP_FROM
+
+# ---------------------------------------------------------------------------
+# .env: Monitor schedule
+# ---------------------------------------------------------------------------
+monitor_interval_minutes = "15"                         # MONITOR_INTERVAL_MINUTES
+
+# ---------------------------------------------------------------------------
+# .env: SWAT board
+# ---------------------------------------------------------------------------
+swat_board_enabled = "true"                             # SWAT_BOARD_ENABLED
+swat_board_port    = "8080"                             # SWAT_BOARD_PORT (keep 8080)
+
+# Leave empty on the first apply. Then copy the board_url output here and apply again.
+swat_board_public_url = ""                              # SWAT_BOARD_PUBLIC_URL
+
+# Board exposure. The board has no login: always set board_allowed_ip_ranges.
+board_internal          = true                          # true = internal load balancer (VNet only)
+board_allowed_ip_ranges = ["10.20.0.0/16"]              # your corporate or VPN range

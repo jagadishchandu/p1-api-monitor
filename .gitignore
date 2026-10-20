@@ -6,3 +6,12 @@ swat_details/
 incidents.json
 swat_status.json
 *.lock
+
+# Terraform: state and local values can hold secrets
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/*.tfvars
+!infra/terraform.tfvars.example
+infra/tfplan
+infra/crash.log
