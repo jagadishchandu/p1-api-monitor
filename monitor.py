@@ -30,6 +30,7 @@ from email.message import EmailMessage
 from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+import base64
 import json
 
 import requests
@@ -98,11 +99,21 @@ def env_list(name: str) -> list:
     return items
 
 
+
+
 def load_config() -> dict:
     config = {
         "sn_instance": os.environ.get("SN_INSTANCE", "").strip(),
         "sn_client_id": os.environ.get("SN_CLIENT_ID", "").strip(),
         "sn_client_secret": os.environ.get("SN_CLIENT_SECRET", ""),
+        # SN_USE_USERNAME_PASSWORD=true: every ServiceNow call uses SN_USERNAME and SN_PASSWORD (HTTP Basic).
+        # false (default): the OAuth client credentials above are used, as before.
+        "sn_use_username_password": env_bool("SN_USE_USERNAME_PASSWORD", False),
+        "sn_username": os.environ.get("SN_USERNAME", "").strip(),
+        # SN_VERIFY_SSL=false skips the certificate check for ServiceNow calls (for example behind a TLS proxy).
+        "sn_verify_ssl": env_bool("SN_VERIFY_SSL", True),
+        # Used exactly as typed (only line endings are removed), so a password with spaces still works.
+        "sn_password": os.environ.get("SN_PASSWORD", "").strip("\r\n"),
         # Account URL only, for example https://stp1apimonjc01.blob.core.windows.net. No key or secret is needed:
         # the app signs in with its managed identity (see init_storage).
         "storage_account_url": os.environ.get("AZURE_STORAGE_ACCOUNT_URL", "").strip().rstrip("/"),
@@ -126,13 +137,21 @@ def load_config() -> dict:
         "swat_board_public_url": (os.environ.get("SWAT_BOARD_PUBLIC_URL", "").strip()
                                   or os.environ.get("SWAT_BOARD_DEFAULT_URL", "").strip() or None),
     }
+    if os.environ.get("AZURE_STORAGE_CONNECTION_STRING"):
+        print("NOTE: AZURE_STORAGE_CONNECTION_STRING is not used any more. The app signs in with its managed identity. "
+              "Remove it from .env and the deployment.", file=sys.stderr)
     if not config["sn_instance"]:
         raise ValueError("missing required environment variable(s): SN_INSTANCE")
     required = [
-        ("SN_CLIENT_ID", "sn_client_id"),
-        ("SN_CLIENT_SECRET", "sn_client_secret"),
         ("AZURE_STORAGE_ACCOUNT_URL", "storage_account_url"),
     ]
+    if config["sn_use_username_password"]:
+        required += [("SN_USERNAME", "sn_username"), ("SN_PASSWORD", "sn_password")]
+        if "@" in config["sn_username"]:
+            print("NOTE: SN_USERNAME looks like an email address. ServiceNow expects the user name, not the email.",
+                  file=sys.stderr)
+    else:
+        required += [("SN_CLIENT_ID", "sn_client_id"), ("SN_CLIENT_SECRET", "sn_client_secret")]
     missing = [name for name, key in required if not config[key]]
     if missing:
         raise ValueError(f"missing required environment variable(s): {', '.join(missing)}")
@@ -170,6 +189,7 @@ def get_oauth_token(config: dict) -> dict:
             },
             headers={"Accept": "application/json"},
             timeout=SN_TIMEOUT_SECONDS,
+            verify=config["sn_verify_ssl"],
         )
     except requests.RequestException as exc:
         raise ServiceNowError(f"could not reach the ServiceNow token endpoint: {exc}")
@@ -187,8 +207,15 @@ def get_oauth_token(config: dict) -> dict:
 
 
 def authenticate(config: dict, session: requests.Session, force: bool = False) -> None:
-    """Set the OAuth bearer token on the session. The token is cached until it nears expiry.
-    force=True fetches a new token."""
+    """Sets how the session signs in to ServiceNow.
+    SN_USE_USERNAME_PASSWORD=true: HTTP Basic auth with SN_USERNAME and SN_PASSWORD on every call.
+    Otherwise: the OAuth bearer token, cached until it nears expiry. force=True fetches a new token."""
+    if config.get("sn_use_username_password"):
+        # Basic auth built by hand as UTF-8, so passwords with accents or symbols work. requests would encode
+        # it as Latin-1 and fail on such characters.
+        raw = f"{config['sn_username']}:{config['sn_password']}".encode("utf-8")
+        session.headers["Authorization"] = "Basic " + base64.b64encode(raw).decode("ascii")
+        return
     if force or not _sn_token["value"] or time.time() >= _sn_token["expires_at"]:
         _sn_token.update(get_oauth_token(config))
     session.headers["Authorization"] = f"Bearer {_sn_token['value']}"
@@ -209,6 +236,9 @@ def fetch_incidents(config: dict) -> tuple:
 
     session = requests.Session()
     session.headers["Accept"] = "application/json"
+    session.verify = config["sn_verify_ssl"]
+    if not config["sn_verify_ssl"]:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     authenticate(config, session)
 
     rows = []
@@ -231,8 +261,10 @@ def fetch_incidents(config: dict) -> tuple:
             raise ServiceNowError(f"could not reach {config['sn_instance']}.service-now.com: {exc}")
         if resp.status_code == 401:
             raise ServiceNowError(
-                "ServiceNow rejected the login (HTTP 401). Check SN_CLIENT_ID and SN_CLIENT_SECRET, "
-                "and that the OAuth application is active and runs as the service account."
+                ("ServiceNow rejected the login (HTTP 401). Check SN_USERNAME and SN_PASSWORD."
+                 if config.get("sn_use_username_password") else
+                 "ServiceNow rejected the login (HTTP 401). Check SN_CLIENT_ID and SN_CLIENT_SECRET, "
+                 "and that the OAuth application is active and runs as the service account.")
             )
         if resp.status_code == 403:
             raise ServiceNowError("ServiceNow refused access (HTTP 403). The account needs read access to the incident table.")

@@ -1,0 +1,40 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is git-ignored.
+#
+# Secrets are NOT in this file. Deploy-ContainerApp.ps1 reads them from ..\.env and passes them as environment
+# variables (TF_VAR_sn_client_secret, TF_VAR_sn_client_id, TF_VAR_smtp_password, TF_VAR_teams_webhook_urls).
+
+subscription_id     = "00000000-0000-0000-0000-000000000000"   # az account show --query id -o tsv
+location            = "eastus2"
+resource_group_name = "rg-p1-api-monitor"
+name_suffix         = "jc01"                                    # 3-12 lowercase letters/digits; makes names unique
+
+app_name         = "p1-api-monitor"
+environment_name = "cae-p1-api-monitor"
+
+# Storage (AZURE_STORAGE_CONTAINER / AZURE_STORAGE_FOLDER)
+storage_container = "p1-api-monitor"
+storage_folder    = "p1-api-monitor"
+
+# ServiceNow (SN_INSTANCE). The client ID and secret come from .env.
+sn_instance = "yourinstance"
+
+# Email (optional). Leave EMAIL_TO empty to turn email off.
+email_to   = ""
+smtp_host  = ""
+smtp_port  = 587
+smtp_starttls = true
+smtp_user  = ""
+smtp_from  = ""
+
+# Monitor and SWAT board
+monitor_interval_minutes = 15
+swat_board_enabled       = true
+swat_board_port          = 8080
+# Leave empty to use the app's own https address. Set it when teams reach the board through another address.
+swat_board_public_url    = ""
+
+tags = {
+  project = "p1-api-monitor"
+  owner   = "you@company.com"
+  managed = "terraform"
+}

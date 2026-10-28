@@ -15,3 +15,11 @@ infra/*.tfvars
 !infra/terraform.tfvars.example
 infra/tfplan
 infra/crash.log
+
+# Terraform (infra-containerapp): state holds secrets; local files
+infra-containerapp/.terraform/
+infra-containerapp/.terraform.lock.hcl.bak
+infra-containerapp/terraform.tfstate
+infra-containerapp/terraform.tfstate.backup
+infra-containerapp/terraform.tfvars
+infra-containerapp/*.tfplan

@@ -14,9 +14,20 @@ COPY monitor.py .
 RUN useradd --create-home --uid 10001 app
 USER app
 
+# Defaults for the non-secret settings. Any value passed at run time (docker compose, docker run -e, Kubernetes,
+# Container Apps, Terraform) overrides these. Secrets and account URLs have no default: they must be passed in.
+ENV AZURE_STORAGE_CONTAINER=p1-api-monitor \
+    AZURE_STORAGE_FOLDER=p1-api-monitor \
+    TEAMS_VERIFY_SSL=true \
+    SMTP_PORT=587 \
+    SMTP_STARTTLS=true \
+    MONITOR_INTERVAL_MINUTES=15 \
+    SWAT_BOARD_ENABLED=true \
+    SWAT_BOARD_PORT=8080
+
 # Default address for the Teams card's "Open SWAT board" button. Set it when you build:
 #   docker build --build-arg SWAT_BOARD_PUBLIC_URL=http://swat-server.company.com:8080 -t p1-api-monitor .
-# A non-empty SWAT_BOARD_PUBLIC_URL in .env overrides it at run time.
+# A non-empty SWAT_BOARD_PUBLIC_URL at run time overrides it.
 ARG SWAT_BOARD_PUBLIC_URL=http://localhost:8080
 ENV SWAT_BOARD_DEFAULT_URL=${SWAT_BOARD_PUBLIC_URL}
 

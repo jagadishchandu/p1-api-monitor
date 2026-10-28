@@ -3,17 +3,58 @@ services:
     build:
       context: .
       args:
-        # Built into the image. Taken from SWAT_BOARD_PUBLIC_URL in .env when set, otherwise the default below.
+        # Built into the image as the default board address. Uses SWAT_BOARD_PUBLIC_URL when set, otherwise localhost.
         SWAT_BOARD_PUBLIC_URL: ${SWAT_BOARD_PUBLIC_URL:-http://localhost:8080}
     image: p1-api-monitor:latest
     container_name: p1-api-monitor
-    # All settings (ServiceNow login, Teams webhook, SMTP, interval) come from .env.
-    # The image itself contains no secrets, so the build does not need .env.
-    env_file:
-      - .env
+
+    # Every setting from .env.example is passed as a variable. Compose reads values from the .env file next to this
+    # file, or from the shell environment (for example in a pipeline), so nothing is hard-coded here.
+    # ${NAME:?message} stops the start with a clear message when a required value is missing.
+    # ${NAME:-default} uses the default when the value is not set. The same defaults are in the Dockerfile.
+    environment:
+      # ServiceNow (REQUIRED)
+      SN_INSTANCE: ${SN_INSTANCE:?Set SN_INSTANCE in .env or the environment}
+      # OAuth client (needed unless SN_USE_USERNAME_PASSWORD=true). The app checks the values it needs at start.
+      SN_CLIENT_ID: ${SN_CLIENT_ID:-}
+      SN_CLIENT_SECRET: ${SN_CLIENT_SECRET:-}
+      # Sign in with a user name and password instead of OAuth (true), and skip the certificate check (false = skip).
+      SN_USE_USERNAME_PASSWORD: ${SN_USE_USERNAME_PASSWORD:-false}
+      SN_USERNAME: ${SN_USERNAME:-}
+      SN_PASSWORD: ${SN_PASSWORD:-}
+      SN_VERIFY_SSL: ${SN_VERIFY_SSL:-true}
+
+      # Azure Storage (REQUIRED). The app signs in with its managed identity. No key is used.
+      AZURE_STORAGE_ACCOUNT_URL: ${AZURE_STORAGE_ACCOUNT_URL:?Set AZURE_STORAGE_ACCOUNT_URL in .env or the environment}
+      AZURE_STORAGE_CONTAINER: ${AZURE_STORAGE_CONTAINER:-p1-api-monitor}
+      AZURE_STORAGE_FOLDER: ${AZURE_STORAGE_FOLDER:-p1-api-monitor}
+
+      # Teams alerts (OPTIONAL)
+      TEAMS_WEBHOOK_URLS: ${TEAMS_WEBHOOK_URLS:-}
+      TEAMS_VERIFY_SSL: ${TEAMS_VERIFY_SSL:-true}
+
+      # Email alerts over SMTP (OPTIONAL)
+      EMAIL_TO: ${EMAIL_TO:-}
+      EMAIL_CC: ${EMAIL_CC:-}
+      EMAIL_BCC: ${EMAIL_BCC:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+
+      # Monitor schedule
+      MONITOR_INTERVAL_MINUTES: ${MONITOR_INTERVAL_MINUTES:-15}
+
+      # SWAT board
+      SWAT_BOARD_ENABLED: ${SWAT_BOARD_ENABLED:-true}
+      SWAT_BOARD_PORT: ${SWAT_BOARD_PORT:-8080}
+      SWAT_BOARD_PUBLIC_URL: ${SWAT_BOARD_PUBLIC_URL:-}
+
     ports:
-      # Host port 8080 -> SWAT board inside the container (port 8080).
+      # Host port 8080 -> SWAT board inside the container (SWAT_BOARD_PORT, default 8080).
       - "8080:8080"
-    # incidents.json, swat_status.json and swat_details/ are stored in Azure Storage
-    # (AZURE_STORAGE_ACCOUNT_URL in .env), so no volume is needed.
+    # incidents.json, swat_status.json and swat_details/ are stored in Azure Storage (AZURE_STORAGE_ACCOUNT_URL),
+    # so no volume is needed.
     restart: unless-stopped
